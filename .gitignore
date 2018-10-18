@@ -1,0 +1,14 @@
+# Distribution and Packaging
+*.pyc
+*.DS_Store
+build/
+dist/
+*.coverage
+*.egg-info/
+
+# Sphinx documentation
+docs/_build
+docs/_static
+docs/_templates
+
+hera_gpu/GIT_INFO
