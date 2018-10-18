@@ -2,18 +2,18 @@
 # Copyright (c) 2018 the HERA Project
 # Licensed under the MIT License
 
-from __future__ import print_function, division, absolute_import
 import numpy as np
 import os
 import warnings
 import copy
 import collections
 
-
 def medfilt2d_pytorch(d, kernel_size):
     import torch
     import torch.nn.functional as F
 
+    if isinstance(kernel_size, int):
+        kernel_size = [kernel_size, kernel_size]
     d = torch.from_numpy(d)
     if torch.cuda.is_available():
         d=d.cuda()
@@ -24,11 +24,13 @@ def medfilt2d_pytorch(d, kernel_size):
     m = d.contiguous().view(d.size()[:2]+(-1,)).median(dim=-1)[0]
     return m.cpu().numpy()
 
-
 def medfilt2d_jack(d=None, kernel_size=3, bw=32, bh=32):
+    """ Copy from https://github.com/Jackmastr/gpu-optimize
+    """
 
     import pycuda.driver as cuda
     from pycuda.compiler import SourceModule
+    import pycuda.autoinit
 
     #s = cuda.Event()
     #e = cuda.Event()
@@ -42,8 +44,8 @@ def medfilt2d_jack(d=None, kernel_size=3, bw=32, bh=32):
         kernel_size = [kernel_size]*2
 
     WS_x, WS_y = kernel_size
-    padding_y = WS_x/2
-    padding_x = WS_y/2
+    padding_x = WS_x/2
+    padding_y = WS_y/2
 
     input_list = np.asarray(input_list)
 
@@ -385,4 +387,5 @@ def medfilt2d_jack(d=None, kernel_size=3, bw=32, bh=32):
     if (padding_x > 0):
         outdata_list = [out[:, padding_x:-padding_x] for out in outdata_list]
 
-    return outdata_list
+    return outdata_list[0]
+
