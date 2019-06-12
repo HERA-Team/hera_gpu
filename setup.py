@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
 	name="hera_gpu",
-	version="2018.08.3",
+	version="2019.06.11",
 	author="Jackson Sipple",
 	author_email="jsipple@berkeley.edu",
 	description="Drop-in replacement functions that run on NVIDIA GPUs, parallelized for speed",

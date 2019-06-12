@@ -1,5 +1,5 @@
 import unittest
-from hera_sim import vis
+import hera_gpu.vis_gpu as vis
 import numpy as np
 
 np.random.seed(0)
