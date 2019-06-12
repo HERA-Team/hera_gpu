@@ -17,6 +17,7 @@ setuptools.setup(
 		'pycuda',
 		'numpy',
 		'scipy',
+		'skcuda',
 	],
 	dependency_links=['https://github.com/HERA-Team/hera_sim'],
 	classifiers=(

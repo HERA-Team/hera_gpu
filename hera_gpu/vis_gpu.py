@@ -1,6 +1,6 @@
 #! /home/aparsons/miniconda3/envs/hera_ml/bin/python2.7
 
-GPU = False
+GPU = True
 
 if GPU:
     from pycuda import compiler, gpuarray, driver
