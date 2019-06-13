@@ -121,6 +121,7 @@ GPU_TEMPLATE_DOUBLE = """
 //            Suggest using odd number.
 
 #include <cuComplex.h>
+#include <pycuda-helpers.hpp>
 
 // Linearly interpolate between [v0,v1] for t=[0,1]
 // v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
@@ -240,7 +241,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             real_dtype=np.float32, complex_dtype=np.complex64,
             verbose=False):
     # use double precision CUDA?
-    double_precison = !(real_dtype==np.float32 and complex_dtype==np.complex64)
+    double_precision = not (real_dtype==np.float32 and complex_dtype==np.complex64)
     # ensure shapes
     nant = antpos.shape[0]
     assert(antpos.shape == (nant, 3))
