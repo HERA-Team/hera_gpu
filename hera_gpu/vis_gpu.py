@@ -120,6 +120,12 @@ def numpy3d_to_array(np_array):
     descr.width = w
     descr.height = h
     descr.depth = d
+    ############### JACKSON'S DOING ###############
+    #if np_array.dtype == np.float64:
+    #    descr.format = driver.array_format.SIGNED_INT32
+    #    descr.num_channels = 2
+    #else:
+    ###############################################
     descr.format = driver.dtype_to_array_format(np_array.dtype)
     descr.num_channels = 1
     descr.flags = 0
@@ -175,7 +181,15 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     import pycuda.autoinit
     h = cublasCreate() # handle for managing cublas
     # define GPU buffers and transfer initial values
+    ##### JACKSON'S CHANGE#####
     bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT)
+    
+    #bm_texref.set_array(driver.matrix_to_array(bm_cube, "C", allow_double_hack=True))
+
+    #bm_gpu = gpuarray.to_gpu(bm_cube)
+    #bm_gpu.bind_to_texref_ext(bm_texref, allow_double_hack=True)
+
+    ###########################
     antpos_gpu = gpuarray.to_gpu(antpos) # never changes, set to -2*pi*antpos/c
     Isqrt_gpu = gpuarray.empty(shape=(npixc,), dtype=real_dtype)
     A_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU by bm_interp

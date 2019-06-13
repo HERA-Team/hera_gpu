@@ -1,7 +1,7 @@
 import unittest
 import numpy as np 
 import scipy.signal as sps
-import hera_gpu.median_filter as mf
+import median_filter as mf
 
 class BasicTest(unittest.TestCase):
 	def testOneByOne(self):
