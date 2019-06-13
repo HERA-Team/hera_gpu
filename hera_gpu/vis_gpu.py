@@ -12,7 +12,7 @@ from scipy.interpolate import RectBivariateSpline
 NTHREADS = 1024 # make 512 for smaller GPUs
 MAX_MEMORY = 2**29 # floats (4B each)
 
-GPU_TEMPLATE = """
+GPU_TEMPLATE_FLOAT = """
 // CUDA code for interpolating antenna beams and computing "voltage" visibilities 
 // [A^1/2 * I^1/2 * exp(-2*pi*i*freq*dot(a,s)/c)]
 // === Template Parameters ===
@@ -110,6 +110,104 @@ __global__ void MeasEq(float *A, float *I, float *tau, float freq, cuFloatComple
 }
 """
 
+GPU_TEMPLATE_DOUBLE = """
+// CUDA code for interpolating antenna beams and computing "voltage" visibilities 
+// [A^1/2 * I^1/2 * exp(-2*pi*i*freq*dot(a,s)/c)]
+// === Template Parameters ===
+// "BLOCK_PX": # of sky pixels handled by one GPU block, used to size shared memory
+// "NANT"   : # of antennas to pair into visibilities
+// "NPIX"   : # of sky pixels to sum over.
+// "BEAM_PX": dimension of sampled square beam matrix to be interpolated.  
+//            Suggest using odd number.
+
+#include <cuComplex.h>
+
+// Linearly interpolate between [v0,v1] for t=[0,1]
+// v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
+// Runs on GPU only
+__device__
+inline double lerp(double v0, double v1, double t) {
+    return fma(t, v1, fma(-t, v0, v0));
+}
+
+// 3D texture storing beam response on (x=sin th_x, y=sin th_y, nant) grid
+// for fast lookup by multiple threads.  Suggest setting first 2 dims of
+// bm_tex to an odd number to get pixel centered on zenith.  The pixels
+// on the border are centered at [-1,1] respectively.  Note that this
+// matrix appears transposed relative to the host-side matrix used to set it.
+texture<fp_tex_double, cudaTextureType3D, cudaReadModeElementType> bm_tex;
+
+// Shared memory for storing per-antenna results to be reused among all ants
+// for "BLOCK_PX" pixels, avoiding a rush on global memory.
+__shared__ double sh_buf[%(BLOCK_PX)s*5];
+
+// Interpolate bm_tex[x,y] at top=(x,y,z) coordinates and store answer in "A"
+__global__ void InterpolateBeam(double *top, double *A)
+{
+    const uint nant = %(NANT)s;
+    const uint npix = %(NPIX)s;
+    const uint tx = threadIdx.x; // switched to make first dim px
+    const uint ty = threadIdx.y; // switched to make second dim ant
+    const uint pix = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint ant = blockIdx.y * blockDim.y + threadIdx.y;
+    const uint beam_px = %(BEAM_PX)s;
+    double bm_x, bm_y, px, py, pz, fx, fy, top_z;
+    if (pix >= npix || ant >= nant) return;
+    if (ty == 0) // buffer top_z for all threads
+        sh_buf[tx+%(BLOCK_PX)s * 4] = top[2*npix+pix];
+    __syncthreads(); // make sure top_z exists for all threads
+    top_z = sh_buf[tx+%(BLOCK_PX)s * 4];
+    if (ty == 0 && top_z > 0) { // buffer x interpolation for all threads
+        bm_x = (beam_px-1) * (0.5 * top[pix] + 0.5);
+        //bm_x = (beam_px) * (0.5 * top[pix] + 0.5) - 0.5f;
+        px = floorf(bm_x);   // integer position
+        sh_buf[tx+%(BLOCK_PX)s * 0] = bm_x - px; // fx, fractional position
+        sh_buf[tx+%(BLOCK_PX)s * 2] = px + 0.5f; // px, pixel index
+    }
+    if (ty == 1 && top_z > 0) { // buffer y interpolation for all threads
+        bm_y = (beam_px-1) * (0.5 * top[npix+pix] + 0.5);
+        //bm_y = (beam_px) * (0.5 * top[npix+pix] + 0.5) - 0.5f;
+        py = floorf(bm_y);
+        sh_buf[tx+%(BLOCK_PX)s * 1] = bm_y - py; // fy, fractional position
+        sh_buf[tx+%(BLOCK_PX)s * 3] = py + 0.5f; // py, pixel index
+    }
+    __syncthreads(); // make sure interpolation exists for all threads
+    if (top_z > 0) {
+        fx = sh_buf[tx+%(BLOCK_PX)s * 0];
+        fy = sh_buf[tx+%(BLOCK_PX)s * 1];
+        px = sh_buf[tx+%(BLOCK_PX)s * 2];
+        py = sh_buf[tx+%(BLOCK_PX)s * 3];
+        pz = ant + 0.5f;
+        A[ant*npix+pix] = lerp(lerp(fp_tex3D(bm_tex,px,py,pz),      fp_tex3D(bm_tex,px+1.0f,py,pz),fx),
+               lerp(fp_tex3D(bm_tex,px,py+1.0f,pz), fp_tex3D(bm_tex,px+1.0f,py+1.0f,pz),fx), fy);
+    } else {
+        A[ant*npix+pix] = 0;
+    }
+    __syncthreads(); // make sure everyone used mem before kicking out
+}
+
+// Compute A*I*exp(ij*tau*freq) for all antennas, storing output in v
+__global__ void MeasEq(double *A, double *I, double *tau, double freq, cuDoubleComplex *v)
+{
+    const uint nant = %(NANT)s;
+    const uint npix = %(NPIX)s;
+    const uint tx = threadIdx.x; // switched to make first dim px
+    const uint ty = threadIdx.y; // switched to make second dim ant
+    const uint row = blockIdx.y * blockDim.y + threadIdx.y; // second thread dim is ant
+    const uint pix = blockIdx.x * blockDim.x + threadIdx.x; // first thread dim is px
+    double amp, phs;
+
+    if (row >= nant || pix >= npix) return;
+    if (ty == 0)
+        sh_buf[tx] = I[pix];
+    __syncthreads(); // make sure all memory is loaded before computing
+    amp = A[row*npix + pix] * sh_buf[tx];
+    phs = tau[row*npix + pix] * freq;
+    v[row*npix + pix] = make_cuDoubleComplex(amp * cos(phs), amp * sin(phs));
+    __syncthreads(); // make sure everyone used mem before kicking out
+}
+"""
+
 def numpy3d_to_array(np_array):
     '''Copy a 3D (d,h,w) numpy array into a 3D pycuda array that can be used 
     to set a texture.  (For some reason, gpuarrays can't be used to do that 
@@ -120,12 +218,6 @@ def numpy3d_to_array(np_array):
     descr.width = w
     descr.height = h
     descr.depth = d
-    ############### JACKSON'S DOING ###############
-    #if np_array.dtype == np.float64:
-    #    descr.format = driver.array_format.SIGNED_INT32
-    #    descr.num_channels = 2
-    #else:
-    ###############################################
     descr.format = driver.dtype_to_array_format(np_array.dtype)
     descr.num_channels = 1
     descr.flags = 0
@@ -147,6 +239,8 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             nthreads=NTHREADS, max_memory=MAX_MEMORY,
             real_dtype=np.float32, complex_dtype=np.complex64,
             verbose=False):
+    # use double precision CUDA?
+    double_precison = !(real_dtype==np.float32 and complex_dtype==np.complex64)
     # ensure shapes
     nant = antpos.shape[0]
     assert(antpos.shape == (nant, 3))
@@ -168,6 +262,10 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     # blocks of threads are mapped to (pixels,ants,freqs)
     block = (max(1,nthreads/nant), min(nthreads,nant), 1)
     grid = (int(ceil(npixc/float(block[0]))),int(ceil(nant/float(block[1]))))
+    
+    # Choose to use single or double precision CUDA code
+    GPU_TEMPLATE = GPU_TEMPLATE_DOUBLE if double_precision else GPU_TEMPLATE_FLOAT
+    
     gpu_code = GPU_TEMPLATE % {
             'NANT': nant,
             'NPIX': npixc,
@@ -181,15 +279,13 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     import pycuda.autoinit
     h = cublasCreate() # handle for managing cublas
     # define GPU buffers and transfer initial values
-    ##### JACKSON'S CHANGE#####
-    bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT)
-    
-    #bm_texref.set_array(driver.matrix_to_array(bm_cube, "C", allow_double_hack=True))
 
-    #bm_gpu = gpuarray.to_gpu(bm_cube)
-    #bm_gpu.bind_to_texref_ext(bm_texref, allow_double_hack=True)
+    if double_precision:
+        bm_gpu = gpuarray.to_gpu(bm_cube)
+        bm_gpu.bind_to_texref_ext(bm_texref, allow_double_hack=True)
+    else:
+        bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT
 
-    ###########################
     antpos_gpu = gpuarray.to_gpu(antpos) # never changes, set to -2*pi*antpos/c
     Isqrt_gpu = gpuarray.empty(shape=(npixc,), dtype=real_dtype)
     A_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU by bm_interp
