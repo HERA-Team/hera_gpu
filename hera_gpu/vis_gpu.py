@@ -1,9 +1,9 @@
 
 GPU = True
 
-if GPU:
-    from pycuda import compiler, gpuarray, driver
-    from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy
+import pycuda.autoinit
+from pycuda import compiler, gpuarray, driver
+from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy
 import numpy as np
 from math import ceil
 import time
@@ -135,12 +135,25 @@ inline double lerp(double v0, double v1, double t) {
     return fma(t, v1, fma(-t, v0, v0));
 }
 
+//__device__
+//inline double fetch_double(uint2 p){
+//	return __hiloint2double(p.y, p.x);
+//}
+
 // 3D texture storing beam response on (x=sin th_x, y=sin th_y, nant) grid
 // for fast lookup by multiple threads.  Suggest setting first 2 dims of
 // bm_tex to an odd number to get pixel centered on zenith.  The pixels
 // on the border are centered at [-1,1] respectively.  Note that this
 // matrix appears transposed relative to the host-side matrix used to set it.
+
+
+
+//texture<float, 3, cudaReadModeElementType> bm_tex;
+
+
 texture<fp_tex_double, cudaTextureType3D, cudaReadModeElementType> bm_tex;
+
+
 
 // Shared memory for storing per-antenna results to be reused among all ants
 // for "BLOCK_PX" pixels, avoiding a rush on global memory.
@@ -149,8 +162,9 @@ __shared__ double sh_buf[%(BLOCK_PX)s*5];
 // Interpolate bm_tex[x,y] at top=(x,y,z) coordinates and store answer in "A"
 __global__ void InterpolateBeam(double *top, double *A)
 {
-    //printf("DOUBLE bm_tex(5,5,5) is %%f", fp_tex3D(bm_tex, 5, 5, 5));
-
+    if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+        printf("DOUBLE bm_tex(5,5,5) is %%f", fp_tex3D(bm_tex, 5, 5, 5));
+    }
     const uint nant = %(NANT)s;
     const uint npix = %(NPIX)s;
     const uint tx = threadIdx.x; // switched to make first dim px
@@ -242,14 +256,18 @@ def numpy3d_to_array_double(np_array):
     '''Copy a 3D (d,h,w) numpy.float64 array into a 3D pycuda array that can be used 
     to set a texture.  (For some reason, gpuarrays can't be used to do that 
     directly).  A transpose happens implicitly; the CUDA array has dim (w,h,d).'''
+    
+    #######
+    np_array = np_array.astype(np.float32)
+    #######
     import pycuda.autoinit
     d, h, w = np_array.shape
     descr = driver.ArrayDescriptor3D()
     descr.width = w
     descr.height = h
     descr.depth = d
-    descr.format = driver.dtype_to_array_format(drv.array_format.SIGNED_INT32)
-    descr.num_channels = 2
+    descr.format = driver.dtype_to_array_format(np.float32)
+    descr.num_channels = 1 #NO IDEA HERE
     descr.flags = 0
     device_array = driver.Array(descr)
     copy = driver.Memcpy3D()
@@ -311,7 +329,10 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     # define GPU buffers and transfer initial values
 
     if double_precision:
-        bm_texref.set_array(numpy3d_to_array(bm_cube))
+    	#bm_cube=bm_cube.astype(np.float32)
+        #bm_texref.set_array(numpy3d_to_array(bm_cube))
+	print "WTF"
+	bm_texref.set_array(driver.np_to_array(bm_cube, "C"))
     else:
         bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT
 

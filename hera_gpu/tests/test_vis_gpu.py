@@ -75,8 +75,8 @@ class TestVisGpu(unittest.TestCase):
             crd_eq,
             I_sky,
             bm_cube,
-            real_dtype=np.float32, #FLOAT64 
-            complex_dtype=np.complex64, #COMPLEX128
+            real_dtype=np.float64, #FLOAT64 
+            complex_dtype=np.complex128, #COMPLEX128
         )
         np.testing.assert_almost_equal(v, NPIX, 10)
         # For co-located ants & two sources separated on sky, answer should still be sum
