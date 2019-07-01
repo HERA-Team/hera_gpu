@@ -23,6 +23,7 @@ GPU_TEMPLATE_FLOAT = """
 //            Suggest using odd number.
 
 #include <cuComplex.h>
+#include <stdio.h>
 
 // Linearly interpolate between [v0,v1] for t=[0,1]
 // v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
@@ -46,6 +47,8 @@ __shared__ float sh_buf[%(BLOCK_PX)s*5];
 // Interpolate bm_tex[x,y] at top=(x,y,z) coordinates and store answer in "A"
 __global__ void InterpolateBeam(float *top, float *A)
 {
+    //printf("FLOAT bm_tex(5,5,5) is %%f", tex3D(bm_tex, 5, 5, 5));
+
     const uint nant = %(NANT)s;
     const uint npix = %(NPIX)s;
     const uint tx = threadIdx.x; // switched to make first dim px
@@ -122,6 +125,7 @@ GPU_TEMPLATE_DOUBLE = """
 
 #include <cuComplex.h>
 #include <pycuda-helpers.hpp>
+#include <stdio.h>
 
 // Linearly interpolate between [v0,v1] for t=[0,1]
 // v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
@@ -145,6 +149,8 @@ __shared__ double sh_buf[%(BLOCK_PX)s*5];
 // Interpolate bm_tex[x,y] at top=(x,y,z) coordinates and store answer in "A"
 __global__ void InterpolateBeam(double *top, double *A)
 {
+    //printf("DOUBLE bm_tex(5,5,5) is %%f", fp_tex3D(bm_tex, 5, 5, 5));
+
     const uint nant = %(NANT)s;
     const uint npix = %(NPIX)s;
     const uint tx = threadIdx.x; // switched to make first dim px
@@ -282,8 +288,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     # define GPU buffers and transfer initial values
 
     if double_precision:
-        bm_gpu = gpuarray.to_gpu(bm_cube)
-        bm_gpu.bind_to_texref_ext(bm_texref, allow_double_hack=True)
+        bm_texref.set_array(numpy3d_to_array(bm_cube))
     else:
         bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT
 
