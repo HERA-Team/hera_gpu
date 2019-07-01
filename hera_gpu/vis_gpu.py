@@ -238,6 +238,29 @@ def numpy3d_to_array(np_array):
     copy()
     return device_array
 
+def numpy3d_to_array_double(np_array):
+    '''Copy a 3D (d,h,w) numpy.float64 array into a 3D pycuda array that can be used 
+    to set a texture.  (For some reason, gpuarrays can't be used to do that 
+    directly).  A transpose happens implicitly; the CUDA array has dim (w,h,d).'''
+    import pycuda.autoinit
+    d, h, w = np_array.shape
+    descr = driver.ArrayDescriptor3D()
+    descr.width = w
+    descr.height = h
+    descr.depth = d
+    descr.format = driver.dtype_to_array_format(drv.array_format.SIGNED_INT32)
+    descr.num_channels = 2
+    descr.flags = 0
+    device_array = driver.Array(descr)
+    copy = driver.Memcpy3D()
+    copy.set_src_host(np_array)
+    copy.set_dst_array(device_array)
+    copy.width_in_bytes = copy.src_pitch = np_array.strides[1]
+    copy.src_height = copy.height = h
+    copy.depth = d
+    copy()
+    return device_array
+
 NTHREADS = 1024 # make 512 for smaller GPUs
 MAX_MEMORY = 2**29 # floats (4B each)
 MIN_CHUNK = 8
