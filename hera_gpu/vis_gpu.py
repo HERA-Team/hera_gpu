@@ -3,7 +3,7 @@ GPU = True
 
 import pycuda.autoinit
 from pycuda import compiler, gpuarray, driver
-from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy
+from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy, cublasDgemm, cublasZgemm
 import numpy as np
 from math import ceil
 import time
@@ -48,6 +48,9 @@ __shared__ float sh_buf[%(BLOCK_PX)s*5];
 __global__ void InterpolateBeam(float *top, float *A)
 {
     //printf("FLOAT bm_tex(5,5,5) is %%f", tex3D(bm_tex, 5, 5, 5));
+    
+    
+
 
     const uint nant = %(NANT)s;
     const uint npix = %(NPIX)s;
@@ -57,6 +60,11 @@ __global__ void InterpolateBeam(float *top, float *A)
     const uint ant = blockIdx.y * blockDim.y + threadIdx.y;
     const uint beam_px = %(BEAM_PX)s;
     float bm_x, bm_y, px, py, pz, fx, fy, top_z;
+
+    if (pix == 0 && ant == 0) {
+        //printf("FLOAT top[3] is %%f and top[2*npix + 3] is %%f", top[3], top[2*npix + 3]);
+    }
+
     if (pix >= npix || ant >= nant) return;
     if (ty == 0) // buffer top_z for all threads
         sh_buf[tx+%(BLOCK_PX)s * 4] = top[2*npix+pix];
@@ -78,7 +86,10 @@ __global__ void InterpolateBeam(float *top, float *A)
     }
     __syncthreads(); // make sure interpolation exists for all threads
     if (top_z > 0) {
-        fx = sh_buf[tx+%(BLOCK_PX)s * 0];
+///////////
+    	//printf("SHARED BUF FLOAT: %%f, %%f //n", sh_buf[tx+%(BLOCK_PX)s * 0], sh_buf[tx+%(BLOCK_PX)s * 2]);
+        ///////////
+	fx = sh_buf[tx+%(BLOCK_PX)s * 0];
         fy = sh_buf[tx+%(BLOCK_PX)s * 1];
         px = sh_buf[tx+%(BLOCK_PX)s * 2];
         py = sh_buf[tx+%(BLOCK_PX)s * 3];
@@ -163,7 +174,8 @@ __shared__ double sh_buf[%(BLOCK_PX)s*5];
 __global__ void InterpolateBeam(double *top, double *A)
 {
     if (threadIdx.x == 0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-        printf("DOUBLE bm_tex(5,5,5) is %%f", fp_tex3D(bm_tex, 5, 5, 5));
+       // printf("DOUBLE bm_tex(5,5,5) is %%f", fp_tex3D(bm_tex, 5, 5, 5));
+
     }
     const uint nant = %(NANT)s;
     const uint npix = %(NPIX)s;
@@ -173,6 +185,12 @@ __global__ void InterpolateBeam(double *top, double *A)
     const uint ant = blockIdx.y * blockDim.y + threadIdx.y;
     const uint beam_px = %(BEAM_PX)s;
     double bm_x, bm_y, px, py, pz, fx, fy, top_z;
+
+    if (pix == 0 && ant == 0) {
+	//printf("DOUBLE top[3] is %%f and top[2*npix + 3] is %%f", top[3], top[2*npix + 3]) ;
+    }
+
+
     if (pix >= npix || ant >= nant) return;
     if (ty == 0) // buffer top_z for all threads
         sh_buf[tx+%(BLOCK_PX)s * 4] = top[2*npix+pix];
@@ -194,6 +212,7 @@ __global__ void InterpolateBeam(double *top, double *A)
     }
     __syncthreads(); // make sure interpolation exists for all threads
     if (top_z > 0) {
+    	//printf("SHARED BUF DOUBLE: %%f, %%f //n", sh_buf[tx+%(BLOCK_PX)s * 0], sh_buf[tx+%(BLOCK_PX)s * 2]);
         fx = sh_buf[tx+%(BLOCK_PX)s * 0];
         fy = sh_buf[tx+%(BLOCK_PX)s * 1];
         px = sh_buf[tx+%(BLOCK_PX)s * 2];
@@ -204,7 +223,12 @@ __global__ void InterpolateBeam(double *top, double *A)
     } else {
         A[ant*npix+pix] = 0;
     }
+
     __syncthreads(); // make sure everyone used mem before kicking out
+
+    if (pix == 0 && ant == 0) {
+	//printf("A[0]: %%f, A[9]: %%f, A[57]: %%f \\n", A[0], A[9], A[57]);
+    }
 }
 
 // Compute A*I*exp(ij*tau*freq) for all antennas, storing output in v
@@ -217,6 +241,10 @@ __global__ void MeasEq(double *A, double *I, double *tau, double freq, cuDoubleC
     const uint row = blockIdx.y * blockDim.y + threadIdx.y; // second thread dim is ant
     const uint pix = blockIdx.x * blockDim.x + threadIdx.x; // first thread dim is px
     double amp, phs;
+
+    if (row == 0 && pix == 0) {
+	//printf("A %%f --- %%f, I %%f --- %%f, TAU %%f --- %%f, FREQ %%f \\n", A[0], A[5], I[0], I[5], tau[0], tau[5], freq);
+    }
 
     if (row >= nant || pix >= npix) return;
     if (ty == 0)
@@ -331,7 +359,6 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     if double_precision:
     	#bm_cube=bm_cube.astype(np.float32)
         #bm_texref.set_array(numpy3d_to_array(bm_cube))
-	print "WTF"
 	bm_texref.set_array(driver.np_to_array(bm_cube, "C"))
     else:
         bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT
@@ -367,11 +394,11 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
                 ## compute crdtop = dot(eq2top,crd_eq)
                 # cublas arrays are in Fortran order, so P=M*N is actually 
                 # peformed as P.T = N.T * M.T
-                cublasSgemm(h, 'n', 'n', npixc, 3, 3, 1., crd_eq_gpu.gpudata, 
+                cublasDgemm(h, 'n', 'n', npixc, 3, 3, 1., crd_eq_gpu.gpudata, 
                     npixc, eq2top_gpu.gpudata, 3, 0., crdtop_gpu.gpudata, npixc)
                 events[cc]['eq2top'].record(stream)
                 ## compute tau = dot(antpos,crdtop)
-                cublasSgemm(h, 'n', 'n', npixc, nant, 3, 1., crdtop_gpu.gpudata, 
+                cublasDgemm(h, 'n', 'n', npixc, nant, 3, 1., crdtop_gpu.gpudata, 
                     npixc, antpos_gpu.gpudata, 3, 0., tau_gpu.gpudata, npixc)
                 events[cc]['tau'].record(stream)
                 ## interpolate bm_tex at specified topocentric coords, store interpolation in A
@@ -384,7 +411,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
                 events[cc]['meas_eq'].record(stream)
                 # compute vis = dot(v, v.T)
                 # transpose below incurs about 20% overhead
-                cublasCgemm(h, 'c', 'n', nant, nant, npixc, 1., v_gpu.gpudata, 
+                cublasZgemm(h, 'c', 'n', nant, nant, npixc, 1., v_gpu.gpudata, 
                     npixc, v_gpu.gpudata, npixc, 0., vis_gpus[cc].gpudata, nant)
                 events[cc]['vis'].record(stream)
             if c < chunk:
