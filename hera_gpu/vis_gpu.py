@@ -280,33 +280,6 @@ def numpy3d_to_array(np_array):
     copy()
     return device_array
 
-def numpy3d_to_array_double(np_array):
-    '''Copy a 3D (d,h,w) numpy.float64 array into a 3D pycuda array that can be used 
-    to set a texture.  (For some reason, gpuarrays can't be used to do that 
-    directly).  A transpose happens implicitly; the CUDA array has dim (w,h,d).'''
-    
-    #######
-    np_array = np_array.astype(np.float32)
-    #######
-    import pycuda.autoinit
-    d, h, w = np_array.shape
-    descr = driver.ArrayDescriptor3D()
-    descr.width = w
-    descr.height = h
-    descr.depth = d
-    descr.format = driver.dtype_to_array_format(np.float32)
-    descr.num_channels = 1 #NO IDEA HERE
-    descr.flags = 0
-    device_array = driver.Array(descr)
-    copy = driver.Memcpy3D()
-    copy.set_src_host(np_array)
-    copy.set_dst_array(device_array)
-    copy.width_in_bytes = copy.src_pitch = np_array.strides[1]
-    copy.src_height = copy.height = h
-    copy.depth = d
-    copy()
-    return device_array
-
 NTHREADS = 1024 # make 512 for smaller GPUs
 MAX_MEMORY = 2**29 # floats (4B each)
 MIN_CHUNK = 8
@@ -315,6 +288,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             nthreads=NTHREADS, max_memory=MAX_MEMORY,
             real_dtype=np.float32, complex_dtype=np.complex64,
             verbose=False):
+
     # use double precision CUDA?
     double_precision = not (real_dtype==np.float32 and complex_dtype==np.complex64)
     # ensure shapes
@@ -352,7 +326,6 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     bm_interp = gpu_module.get_function("InterpolateBeam")
     meas_eq = gpu_module.get_function("MeasEq")
     bm_texref = gpu_module.get_texref("bm_tex")
-    import pycuda.autoinit
     h = cublasCreate() # handle for managing cublas
     # define GPU buffers and transfer initial values
 
@@ -493,199 +466,4 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     cublasDestroy(h)
     return vis
 
-def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
-            real_dtype=np.float32, complex_dtype=np.complex64,
-            verbose=False):
-    nant = len(antpos)
-    ntimes = len(eq2tops)
-    npix = I_sky.size
-    bm_pix = bm_cube.shape[-1]
-    Isqrt = np.sqrt(I_sky).astype(real_dtype)
-    antpos = antpos.astype(real_dtype)
-    A_s = np.empty((nant,npix), dtype=real_dtype)
-    vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
-    tau = np.empty((nant,npix), dtype=real_dtype)
-    v = np.empty((nant,npix), dtype=complex_dtype)
-    bm_pix_x = np.linspace(-1,1,bm_pix)
-    bm_pix_y = np.linspace(-1,1,bm_pix)
-    for t,eq2top in enumerate(eq2tops.astype(real_dtype)):
-        if verbose:
-            print '%d/%d' % (t, ntimes)
-            t_start = time.time()
-        tx,ty,tz = crd_top = np.dot(eq2top, crd_eq)
-        for i in xrange(nant):
-            spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
-            A_s[i] = spline(ty, tx, grid=False)
-        A_s = np.where(tz > 0, A_s, 0)
-        np.dot(antpos, crd_top, out=tau)
-        np.exp((1j*freq)*tau, out=v)
-        AI_s = A_s * Isqrt
-        v *= AI_s
-        for i in xrange(len(antpos)):
-            # only compute upper triangle
-            np.dot(v[i:i+1].conj(), v[i:].T, out=vis[t,i:i+1,i:])
-        if verbose:
-            print 'TOTAL:', time.time() - t_start
-            #print vis[t].conj()
-    np.conj(vis, out=vis)
-    for i in xrange(nant):
-        # fill in whole corr matrix from upper triangle
-        vis[:,i+1:,i] = vis[:,i,i+1:].conj()
-    return vis
 
-def aa_to_antpos(aa, ants=None):
-    if ants is None: ants = xrange(nant)
-    nant = len(ants)
-    antpos = np.empty((nant, 3), dtype=np.float32)
-    for i,ai in enumerate(ants):
-        antpos[i] = aa.get_baseline(0,ai,src='z')
-    return antpos
-
-def aa_to_bm_cube(aa, chan, pol, ants=None, beam_px=63):
-    if ants is None: ants = xrange(len(aa))
-    nant = len(ants)
-    assert(pol in ('x','y')) # XXX can only support single linear polarizations right now
-    bm_cube = np.empty((nant,beam_px,beam_px), dtype=np.float32) # X is 3rd dim, Y is 2nd dim
-    tx = np.linspace(-1,1,beam_px, dtype=np.float32)
-    tx = np.resize(tx, (beam_px,beam_px))
-    ty = tx.T.copy()
-    tx = tx.flatten(); ty = ty.flatten()
-    txty_sqr = tx**2 + ty**2
-    tz = np.where(txty_sqr < 1, np.sqrt(1-txty_sqr), -1)
-    top = np.array([tx,ty,tz])
-    aa.select_chans([chan])
-    for i,ai in enumerate(ants):
-        bmi = np.where(tz > 0, aa[ai].bm_response(top, pol=pol), 0)
-        bm_cube[i] = np.reshape(bmi, (beam_px,beam_px))
-    return bm_cube
-
-def hmap_to_bm_cube(hmaps, beam_px=63):
-    nant = len(hmaps)
-    bm_cube = np.empty((nant,beam_px,beam_px), dtype=np.float32) # X is 3rd dim, Y is 2nd dim
-    tx = np.linspace(-1,1,beam_px, dtype=np.float32)
-    tx = np.resize(tx, (beam_px,beam_px))
-    ty = tx.T.copy()
-    tx = tx.flatten(); ty = ty.flatten()
-    txty_sqr = tx**2 + ty**2
-    tz = np.where(txty_sqr < 1, np.sqrt(1-txty_sqr), -1)
-    #top = np.array([tx,ty,tz])
-    for i,hi in enumerate(hmaps):
-        bmi = np.where(tz > 0, hi[tx,ty,tz], 0) / np.max(hi.map)
-        bm_cube[i] = np.reshape(bmi, (beam_px,beam_px))
-    return bm_cube
-
-def aa_to_eq2tops(aa, jds):
-    eq2tops = np.empty((len(jds),3,3), dtype=np.float32)
-    for i,jd in enumerate(jds):
-        aa.set_jultime(jd)
-        eq2tops[i] = aa.eq2top_m
-    return eq2tops
-    
-def hmap_to_crd_eq(h):
-    px = np.arange(h.npix())
-    crd_eq = np.array(h.px2crd(px,3), dtype=np.float32)
-    return crd_eq
-
-def hmap_to_I(h):
-    return h[np.arange(h.npix())].astype(np.float32)
-
-if __name__ == '__main__':
-    #ROOT = '/Users'
-    ROOT = '/home'
-    NTIMES = 100
-    NFREQS = 1
-    START_FQ, END_FQ = .1, .2
-    START_JD, END_JD = 2458000, 2458001
-    #START_JD, END_JD = 2458000.2, 2458000.8
-    freqs = np.linspace(START_FQ, END_FQ,NFREQS, endpoint=False)
-    jds = np.linspace(START_JD, END_JD, NTIMES)
-
-    BEAM_PX = 63
-    GSM = ROOT+'/aparsons/projects/eor/maps/lambda_haslam408_dsds_eq.fits'
-    BM_MDL = ROOT+'/aparsons/projects/eor/beam/hera-cst/mdl04/X4Y2H_4900_%3d.hmap'
-    VERBOSE = True
-    PLOT = False
-
-    # Initialization of values on CPU side
-    np.random.seed(0)
-    ants = (80, 104, 96, 64, 53, 31, 65, 88, 9, 20, 89, 43, 105, 22, 81, 10, 72, 112, 97)
-    #ants = (128 / 16) * ants[:16]
-    ants = ants[:16]
-    #ants = ants[:4]
-    import aipy
-    #aa = aipy.cal.get_aa('hsa7458_v001', np.array([FREQ]))
-    aa = aipy.cal.get_aa('hsa7458_v001', freqs)
-    antpos = aa_to_antpos(aa, ants=ants)
-    antpos *= -2 * np.pi # cm -> ns conversion
-    #bm_cube = aa_to_bm_cube(aa, chan=0, ants=ants, pol='x')
-    bm_hmaps = [aipy.healpix.HealpixMap(fromfits=(BM_MDL % (int(1000*fq)))) for fq in freqs]
-    #bm_cubes = hmap_to_bm_cube([bm_hmap] * len(ants), beam_px=BEAM_PX)
-    eq2tops = aa_to_eq2tops(aa, jds)
-    gsm = aipy.healpix.HealpixMap(fromfits=GSM)
-    crd_eq = hmap_to_crd_eq(gsm)
-    #I_sky = np.random.normal(size=gsm.npix()) + 10.
-    I_sky = hmap_to_I(gsm)
-    #crd_eq = np.dot(np.linalg.inv(eq2tops[NTIMES/2]), np.array([[0.],[0],[1]], dtype=np.float32))
-    #crd_eq = np.array([[0.],[1.],[0]], dtype=np.float32)
-    #crd_eq = np.array([[0.,0],[1.,0],[0,-1]], dtype=np.float32)
-    #I_sky = np.array([1.], dtype=np.float32)
-    #I_sky = np.array([1.,1], dtype=np.float32)
-
-    ##crd_eq = np.random.uniform(size=(3,NPIX)).astype(real_dtype)
-    #crd_eq = np.zeros(shape=(3,NPIX), dtype=np.float32)
-    #crd_eq[2] = 1
-    ##crd_eq[0,0] = -1
-    #crd_eq[0,0] = 1
-    ## note that bm_tex is transposed relative to the cuda texture buffer
-    ##bm_cube = np.ones(shape=(NANT,BEAM_PX,BEAM_PX), dtype=np.float32) # X is 3rd dim, Y is 2nd dim
-    ##bm_cube *= 0
-    ##bm_cube[:,31,62] = 2
-    ##bm_cube[:,31,0] = 2
-    #I_sky = np.zeros(shape=(NPIX,), dtype=np.float32)
-    #I_sky[0] = 1
-
-    if GPU:
-        import pycuda.autoinit
-        print '=== Device attributes'
-        dev = pycuda.autoinit.device
-        print 'Name:', dev.name()
-        print 'Compute capability:', dev.compute_capability()
-        print 'Concurrent Kernels:', \
-             bool(dev.get_attribute(driver.device_attribute.CONCURRENT_KERNELS))
-
-    print 'NANT:', len(antpos)
-    print 'NPIX:', I_sky.size
-    print 'NTIMES:', NTIMES
-    print 'NFREQS:', NFREQS
-    t_start = time.time()
-    print 'Starting', t_start
-
-    if GPU: compute_vis = vis_gpu
-    else: compute_vis = vis_cpu
-    #bm_cubes = hmap_to_bm_cube([bm_hmap] * len(ants), beam_px=BEAM_PX)
-    vis = []
-    for i,fq in enumerate(freqs):
-        print '=== FREQ %d/%d ===' % (i, len(freqs))
-        bm_cube = hmap_to_bm_cube([bm_hmaps[i]] * len(ants), beam_px=BEAM_PX)
-        #vis_ = compute_vis(antpos, fq, eq2tops, crd_eq, I_sky, bm_cube, verbose=VERBOSE)
-        vis_ = compute_vis(antpos, fq, eq2tops, crd_eq, I_sky * (fq/.408)**-2.5, bm_cube, verbose=VERBOSE)
-        vis.append(vis_)
-    vis = np.array(vis)
-    #vis = np.array([compute_vis(antpos, fq, eq2tops, crd_eq, I_sky,
-    #                            hmap_to_bm_cube([bm_hmaps[i]] * len(ants), beam_px=BEAM_PX), 
-    #                            verbose=VERBOSE) 
-    #                for i,fq in enumerate(freqs)])
-    #print np.allclose(vis, 4)
-    print 'Time elapsed:', time.time() - t_start
-    if PLOT:
-        import pylab as plt, uvtools
-        #plt.plot(vis[:,0,1].real)
-        #plt.plot(vis[:,0,1].imag)
-        #plt.plot(np.abs(vis[NFREQS/2,:,0,1])**2)
-        #plt.show()
-        plt.subplot(121)
-        uvtools.plot.waterfall(vis[:,:,0,1], mode='phs')
-        plt.subplot(122)
-        uvtools.plot.waterfall(vis[:,:,0,1], mode='log', drng=4)
-        plt.show()
-    #import IPython; IPython.embed()
