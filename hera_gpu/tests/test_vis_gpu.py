@@ -94,10 +94,23 @@ class TestVisGpu(unittest.TestCase):
 
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
+        v_CPU = vis.vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
 	np.testing.assert_almost_equal(
-            v[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
-        )
+	    v, v_CPU, 7
+	)
+
+        v_CPU = vis.vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+
+        v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+
+	np.testing.assert_almost_equal(
+	    v, v_CPU, 7
+	)
+
+	'''np.testing.assert_almost_equal(
+            v_CPU[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
+        )'''
 
 
 if __name__ == "__main__":
