@@ -10,7 +10,7 @@ NPIX = 12 * 16 ** 2
 
 
 class TestVisGpu(unittest.TestCase):
-    '''def test_shapes(self):
+    def test_shapes(self):
         antpos = np.zeros((NANT, 3))
         eq2tops = np.zeros((NTIMES, 3, 3))
         crd_eq = np.zeros((3, NPIX))
@@ -50,7 +50,7 @@ class TestVisGpu(unittest.TestCase):
                 real_dtype=np.float64,
                 complex_dtype=np.complex128,
             )
-            self.assertEqual(v.dtype, np.complex128)'''
+            self.assertEqual(v.dtype, np.complex128)
     def test_values(self):
         antpos = np.ones((NANT, 3))
         eq2tops = np.array([np.identity(3)] * NTIMES)
@@ -59,14 +59,14 @@ class TestVisGpu(unittest.TestCase):
         I_sky = np.ones(NPIX)
         bm_cube = np.ones((NANT, BM_PIX, BM_PIX))
         # Make sure that a zero in sky or beam gives zero output
-        '''v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky * 0, bm_cube)
+        v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky * 0, bm_cube)
         np.testing.assert_equal(v, 0)
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube * 0)
         np.testing.assert_equal(v, 0)
         # For co-located ants & sources on sky, answer should be sum of pixels
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
-        np.testing.assert_almost_equal(v, NPIX, 2)'''
-        '''v = vis.vis_gpu(
+        np.testing.assert_almost_equal(v, NPIX, 2)
+        v = vis.vis_gpu(
             antpos,
             1.0,
             eq2tops,
@@ -76,7 +76,7 @@ class TestVisGpu(unittest.TestCase):
             real_dtype=np.float64, #FLOAT64 
             complex_dtype=np.complex128, #COMPLEX128
         )
-        np.testing.assert_almost_equal(v, NPIX, 10)'''
+        np.testing.assert_almost_equal(v, NPIX, 10)
 
 
 	
@@ -86,11 +86,12 @@ class TestVisGpu(unittest.TestCase):
         crd_eq[1, 1] = np.sqrt(0.5)
         crd_eq[2, 1] = np.sqrt(0.5)
         I_sky = np.ones(2)
-        '''v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
-        np.testing.assert_almost_equal(v, 2, 2)'''
+        v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
+        np.testing.assert_almost_equal(v, 2, 2)
         # For ant[0] at (0,0,1), ant[1] at (1,1,1), src[0] at (0,0,1) and src[1] at (0,.707,.707)
         antpos[0, 0] = 0
         antpos[0, 1] = 0
+
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
 
