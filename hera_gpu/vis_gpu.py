@@ -466,44 +466,4 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     cublasDestroy(h)
     return vis
 
-def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
-            real_dtype=np.float32, complex_dtype=np.complex64,
-            verbose=False):
-    nant = len(antpos)
-    ntimes = len(eq2tops)
-    npix = I_sky.size
-    bm_pix = bm_cube.shape[-1]
-    Isqrt = np.sqrt(I_sky).astype(real_dtype)
-    antpos = antpos.astype(real_dtype)
-    A_s = np.empty((nant,npix), dtype=real_dtype)
-    vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
-    tau = np.empty((nant,npix), dtype=real_dtype)
-    v = np.empty((nant,npix), dtype=complex_dtype)
-    bm_pix_x = np.linspace(-1,1,bm_pix)
-    bm_pix_y = np.linspace(-1,1,bm_pix)
-    for t,eq2top in enumerate(eq2tops.astype(real_dtype)):
-        if verbose:
-            print '%d/%d' % (t, ntimes)
-            t_start = time.time()
-        tx,ty,tz = crd_top = np.dot(eq2top, crd_eq)
-        for i in xrange(nant):
-            spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
-            A_s[i] = spline(ty, tx, grid=False)
-        A_s = np.where(tz > 0, A_s, 0)
-
-        tau = np.dot(antpos, crd_top) #OUT=TAU
-        np.exp((1j*freq)*tau, out=v)
-        AI_s = A_s * Isqrt
-        v *= AI_s
-        for i in xrange(len(antpos)):
-            # only compute upper triangle
-            np.dot(v[i:i+1].conj(), v[i:].T, out=vis[t,i:i+1,i:])
-        if verbose:
-            print 'TOTAL:', time.time() - t_start
-            #print vis[t].conj()
-    np.conj(vis, out=vis)
-    for i in xrange(nant):
-        # fill in whole corr matrix from upper triangle
-        vis[:,i+1:,i] = vis[:,i,i+1:].conj()
-    return vis
 

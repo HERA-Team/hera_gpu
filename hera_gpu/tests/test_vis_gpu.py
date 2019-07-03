@@ -1,13 +1,14 @@
 import unittest
 import vis_gpu as vis
 import numpy as np
+from numpy.random import rand
+from scipy.interpolate import RectBivariateSpline
 
 np.random.seed(0)
 NANT = 16
 NTIMES = 10
 BM_PIX = 31
 NPIX = 12 * 16 ** 2
-
 
 class TestVisGpu(unittest.TestCase):
     def test_shapes(self):
@@ -94,13 +95,13 @@ class TestVisGpu(unittest.TestCase):
 
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
-        v_CPU = vis.vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
+        v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
 	np.testing.assert_almost_equal(
 	    v, v_CPU, 7
 	)
 
-        v_CPU = vis.vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+        v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 
@@ -111,6 +112,66 @@ class TestVisGpu(unittest.TestCase):
 	'''np.testing.assert_almost_equal(
             v_CPU[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
         )'''
+
+    def test_compare_cpu(self):
+
+    	for i in xrange(NTIMES):
+	    antpos = rand(NANT, 3)
+	    eq2tops = rand(NTIMES, 3, 3)
+	    crd_eq = rand(3, NPIX)
+	    I_sky = rand(NPIX)
+	    bm_cube = rand(NANT, BM_PIX, BM_PIX)
+	    freq = rand(1)[0]
+	    freq *= 10
+
+	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-6)
+
+	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-9)
+
+
+
+def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
+            real_dtype=np.float32, complex_dtype=np.complex64,
+            verbose=False):
+    nant = len(antpos)
+    ntimes = len(eq2tops)
+    npix = I_sky.size
+    bm_pix = bm_cube.shape[-1]
+    Isqrt = np.sqrt(I_sky).astype(real_dtype)
+    antpos = antpos.astype(real_dtype)
+    A_s = np.empty((nant,npix), dtype=real_dtype)
+    vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
+    tau = np.empty((nant,npix), dtype=real_dtype)
+    v = np.empty((nant,npix), dtype=complex_dtype)
+    bm_pix_x = np.linspace(-1,1,bm_pix)
+    bm_pix_y = np.linspace(-1,1,bm_pix)
+    for t,eq2top in enumerate(eq2tops.astype(real_dtype)):
+        tx,ty,tz = crd_top = np.dot(eq2top, crd_eq)
+        for i in xrange(nant):
+            spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
+            A_s[i] = spline(ty, tx, grid=False)
+        A_s = np.where(tz > 0, A_s, 0)
+
+        tau = np.dot(antpos, crd_top) #OUT=TAU
+        np.exp((1j*freq)*tau, out=v)
+        AI_s = A_s * Isqrt
+        v *= AI_s
+        for i in xrange(len(antpos)):
+            # only compute upper triangle
+            np.dot(v[i:i+1].conj(), v[i:].T, out=vis[t,i:i+1,i:])
+        if verbose:
+            print 'TOTAL:', time.time() - t_start
+            #print vis[t].conj()
+    np.conj(vis, out=vis)
+    for i in xrange(nant):
+        # fill in whole corr matrix from upper triangle
+        vis[:,i+1:,i] = vis[:,i,i+1:].conj()
+    return vis
+
 
 
 if __name__ == "__main__":
