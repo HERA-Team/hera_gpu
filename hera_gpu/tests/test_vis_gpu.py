@@ -4,7 +4,7 @@ import numpy as np
 from numpy.random import rand
 from scipy.interpolate import RectBivariateSpline
 
-np.random.seed(0)
+#np.random.seed(0)
 NANT = 16
 NTIMES = 10
 BM_PIX = 31
@@ -93,27 +93,34 @@ class TestVisGpu(unittest.TestCase):
         antpos[0, 0] = 0
         antpos[0, 1] = 0
 
+	antpos = rand(NANT, 3)
+	crd_eq = rand(3,2)
+	I_sky = rand(2)
+	#bm_cube = rand(NANT, BM_PIX, BM_PIX)
+	
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
 
-	np.testing.assert_almost_equal(
-	    v, v_CPU, 7
-	)
+	#np.testing.assert_almost_equal(
+	   # v, v_CPU, 7
+	#)
+
+	np.testing.assert_allclose(v, v_CPU, 1e-6)
 
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 
 	np.testing.assert_almost_equal(
-	    v, v_CPU, 7
+	    v, v_CPU, 15
 	)
 
-	'''np.testing.assert_almost_equal(
-            v_CPU[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
-        )'''
+	#np.testing.assert_almost_equal(
+        #    v_CPU[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
+        #)
 
-    def test_compare_cpu(self):
+    '''def test_compare_cpu(self):
 
     	for i in xrange(NTIMES):
 	    antpos = rand(NANT, 3)
@@ -124,13 +131,13 @@ class TestVisGpu(unittest.TestCase):
 	    freq = rand(1)[0]
 	    freq *= 10
 
-	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube) #, real_dtype=np.float64, complex_dtype=np.complex128)
 	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
 	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-6)
 
 	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-9)
+	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-9)'''
 
 
 
@@ -155,6 +162,9 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
             A_s[i] = spline(ty, tx, grid=False)
         A_s = np.where(tz > 0, A_s, 0)
+
+	#print bm_cube[i][0]
+	#print "CPU CPU CPU CPU", A_s
 
         tau = np.dot(antpos, crd_top) #OUT=TAU
         np.exp((1j*freq)*tau, out=v)

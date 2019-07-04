@@ -73,14 +73,14 @@ __global__ void InterpolateBeam(float *top, float *A)
     if (ty == 0 && top_z > 0) { // buffer x interpolation for all threads
         bm_x = (beam_px-1) * (0.5 * top[pix] + 0.5);
         //bm_x = (beam_px) * (0.5 * top[pix] + 0.5) - 0.5f;
-        px = floorf(bm_x);   // integer position
+        px = floorf(bm_x); 
         sh_buf[tx+%(BLOCK_PX)s * 0] = bm_x - px; // fx, fractional position
         sh_buf[tx+%(BLOCK_PX)s * 2] = px + 0.5f; // px, pixel index
     }
     if (ty == 1 && top_z > 0) { // buffer y interpolation for all threads
         bm_y = (beam_px-1) * (0.5 * top[npix+pix] + 0.5);
-        //bm_y = (beam_px) * (0.5 * top[npix+pix] + 0.5) - 0.5f;
-        py = floorf(bm_y);
+        //bm_y = (beam_px) * (0.5 * top[npix+pix] + 0.5) - 0.5f;        
+	py = floorf(bm_y); 
         sh_buf[tx+%(BLOCK_PX)s * 1] = bm_y - py; // fy, fractional position
         sh_buf[tx+%(BLOCK_PX)s * 3] = py + 0.5f; // py, pixel index
     }
@@ -100,6 +100,10 @@ __global__ void InterpolateBeam(float *top, float *A)
         A[ant*npix+pix] = 0;
     }
     __syncthreads(); // make sure everyone used mem before kicking out
+
+    //if (pix == 0 && ant == 0) {
+    	//printf("sh_buf contents: %%f, %%f, ... \\n", sh_buf[0], sh_buf[1]);
+    //}
 }
 
 // Compute A*I*exp(ij*tau*freq) for all antennas, storing output in v
@@ -460,7 +464,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
 		    #    print c, e,'->',event_order[i+1], ':', events[c][e].time_till(events[c][event_order[i+1]]) * 1e-3
 		print 'TOTAL:', events[0]['start'].time_till(events[chunk-1]['end']) * 1e-3
 
-
+    print "GPU GPU GPU GPU", A_gpu.get()
 
     # teardown GPU configuration
     cublasDestroy(h)
