@@ -3,8 +3,9 @@ import vis_gpu as vis
 import numpy as np
 from numpy.random import rand
 from scipy.interpolate import RectBivariateSpline
+import time
 
-#np.random.seed(0)
+np.random.seed(0)
 NANT = 16
 NTIMES = 10
 BM_PIX = 31
@@ -93,57 +94,49 @@ class TestVisGpu(unittest.TestCase):
         antpos[0, 0] = 0
         antpos[0, 1] = 0
 
-	antpos = rand(NANT, 3)
-	crd_eq = rand(3,2)
-	I_sky = rand(2)
-	#bm_cube = rand(NANT, BM_PIX, BM_PIX)
-	
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
-
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
-
-	#np.testing.assert_almost_equal(
-	   # v, v_CPU, 7
-	#)
-
 	np.testing.assert_allclose(v, v_CPU, 1e-6)
 
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-
 	np.testing.assert_almost_equal(
 	    v, v_CPU, 15
 	)
 
-	#np.testing.assert_almost_equal(
-        #    v_CPU[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
-        #)
+	np.testing.assert_almost_equal(
+            v[:, 0, 1], 1 + np.exp(-2j * np.pi * np.sqrt(0.5)), 7
+        )
 
-    '''def test_compare_cpu(self):
+    def test_compare_cpu(self):
 
     	for i in xrange(NTIMES):
-	    antpos = rand(NANT, 3)
-	    eq2tops = rand(NTIMES, 3, 3)
-	    crd_eq = rand(3, NPIX)
-	    I_sky = rand(NPIX)
-	    bm_cube = rand(NANT, BM_PIX, BM_PIX)
-	    freq = rand(1)[0]
-	    freq *= 10
+	    antpos = np.array(rand(NANT, 3), dtype=np.float32)
+	    eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
+	    crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
+	    I_sky = np.array(rand(NPIX), dtype=np.float32)
+	    bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
+	    freq = float(rand(1)[0])
 
 	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube) #, real_dtype=np.float64, complex_dtype=np.complex128)
 	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
-	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-6)
-
+	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-5)
+	    
 	    v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
 	    v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-9)'''
+	    np.testing.assert_allclose(v_gpu, v_cpu, 1e-9)
 
 
-
+"""
 def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             real_dtype=np.float32, complex_dtype=np.complex64,
             verbose=False):
+
+    crd_eq = crd_eq.astype(real_dtype)
+
+
+
+    t_start = time.time()
     nant = len(antpos)
     ntimes = len(eq2tops)
     npix = I_sky.size
@@ -163,10 +156,7 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
             A_s[i] = spline(ty, tx, grid=False)
         A_s = np.where(tz > 0, A_s, 0)
 
-	#print bm_cube[i][0]
-	#print "CPU CPU CPU CPU", A_s
-
-        tau = np.dot(antpos, crd_top) #OUT=TAU
+        np.dot(antpos, crd_top, out=tau) #OUT=TAU
         np.exp((1j*freq)*tau, out=v)
         AI_s = A_s * Isqrt
         v *= AI_s
@@ -181,6 +171,94 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
         # fill in whole corr matrix from upper triangle
         vis[:,i+1:,i] = vis[:,i,i+1:].conj()
     return vis
+"""
+
+def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float32, complex_dtype=np.complex64):
+    """
+    Calculate visibility from an input intensity map and beam model.
+    
+    Args:
+        antpos (array_like, shape: (NANT, 3)): antenna position array.
+        freq (float): frequency to evaluate the visibilities at [GHz].
+        eq2tops (array_like, shape: (NTIMES, 3, 3)): Set of 3x3 transformation matrices converting equatorial
+            coordinates to topocentric at each hour angle (and declination) in the dataset.
+        crd_eq (array_like, shape: (3, NPIX)): equatorial coordinates of Healpix pixels.
+        I_sky (array_like, shape: (NPIX,)): intensity distribution on the sky, stored as array of Healpix pixels.
+        bm_cube (array_like, shape: (NANT, BM_PIX, BM_PIX)): beam maps for each antenna.
+        real_dtype, complex_dtype (dtype, optional): data type to use for real and complex-valued arrays.
+    
+    Returns:
+        array_like, shape(NTIMES, NANTS, NANTS): visibilities
+    """
+    nant, ncrd = antpos.shape
+    assert ncrd == 3, "antpos must have shape (NANTS, 3)"
+    ntimes, ncrd1, ncrd2 = eq2tops.shape
+    assert ncrd1 == 3 and ncrd2 == 3, "eq2tops must have shape (NTIMES, 3, 3)"
+    ncrd, npix = crd_eq.shape
+    assert ncrd == 3, "crd_eq must have shape (3, NPIX)"
+    assert I_sky.ndim == 1 and I_sky.shape[0] == npix, "I_sky must have shape (NPIX,)"
+    bm_pix = bm_cube.shape[-1]
+    assert bm_cube.shape == (
+        nant,
+        bm_pix,
+        bm_pix,
+    ), "bm_cube must have shape (NANTS, BM_PIX, BM_PIX)"
+
+    # Intensity distribution (sqrt) and antenna positions
+    Isqrt = np.sqrt(I_sky).astype(real_dtype)  # XXX does not support negative sky
+    antpos = antpos.astype(real_dtype)
+    ang_freq = 2 * np.pi * freq
+
+    # Empty arrays: beam pattern, visibilities, delays, complex voltages
+    A_s = np.empty((nant, npix), dtype=real_dtype)
+    vis = np.empty((ntimes, nant, nant), dtype=complex_dtype)
+    tau = np.empty((nant, npix), dtype=real_dtype)
+    v = np.empty((nant, npix), dtype=complex_dtype)
+    crd_eq = crd_eq.astype(real_dtype)
+
+    bm_pix_x = np.linspace(-1, 1, bm_pix)
+    bm_pix_y = np.linspace(-1, 1, bm_pix)
+
+    # Loop over time samples
+    for t, eq2top in enumerate(eq2tops.astype(real_dtype)):
+        tx, ty, tz = crd_top = np.dot(eq2top, crd_eq)
+        for i in range(nant):
+            # Linear interpolation of primary beam pattern
+            spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
+            A_s[i] = spline(ty, tx, grid=False)
+        A_s = np.where(tz > 0, A_s, 0)
+
+        # Calculate delays
+        np.dot(antpos, crd_top, out=tau)
+        np.exp((1.0j * ang_freq) * tau, out=v)
+
+        # Complex voltages
+        v *= A_s * Isqrt
+
+        # Compute visibilities (upper triangle only)
+        for i in range(len(antpos)):
+            np.dot(v[i : i + 1].conj(), v[i:].T, out=vis[t, i : i + 1, i:])
+
+    # Conjugate visibilities
+    np.conj(vis, out=vis)
+
+    # Fill in whole visibility matrix from upper triangle
+    for i in range(nant):
+        vis[:, i + 1 :, i] = vis[:, i, i + 1 :].conj()
+
+    return vis
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
