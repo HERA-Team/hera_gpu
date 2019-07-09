@@ -96,7 +96,7 @@ class TestVisGpu(unittest.TestCase):
 
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube)
-	np.testing.assert_allclose(v, v_CPU, 1e-6)
+	np.testing.assert_allclose(v, v_CPU, 1e-5)
 
         v_CPU = vis_cpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
         v = vis.vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
