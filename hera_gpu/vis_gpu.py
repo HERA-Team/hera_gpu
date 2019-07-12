@@ -25,7 +25,7 @@ GPU_TEMPLATE_FLOAT = """
 // v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
 // Runs on GPU only
 __device__
-inline float lerp(float v0, float v1, float t) {
+inline double lerp(double v0, double v1, double t) { ////////////////////////////////////////WAS FLOAT
     return fma(t, v1, fma(-t, v0, v0));
 }
 
@@ -38,7 +38,7 @@ texture<float, cudaTextureType3D, cudaReadModeElementType> bm_tex;
 
 // Shared memory for storing per-antenna results to be reused among all ants
 // for "BLOCK_PX" pixels, avoiding a rush on global memory.
-__shared__ float sh_buf[%(BLOCK_PX)s*5]; 
+__shared__ double sh_buf[%(BLOCK_PX)s*5]; //////////////////WAS FLOAT
 
 // Interpolate bm_tex[x,y] at top=(x,y,z) coordinates and store answer in "A"
 __global__ void InterpolateBeam(float *top, float *A)
@@ -50,7 +50,7 @@ __global__ void InterpolateBeam(float *top, float *A)
     const uint pix = blockIdx.x * blockDim.x + threadIdx.x;
     const uint ant = blockIdx.y * blockDim.y + threadIdx.y;
     const uint beam_px = %(BEAM_PX)s;
-    float bm_x, bm_y, px, py, pz, fx, fy, top_z; 
+    double bm_x, bm_y, px, py, pz, fx, fy, top_z; ///////////////////////////WAS FLOAT
 
     if (pix >= npix || ant >= nant) return;
     if (ty == 0) // buffer top_z for all threads
@@ -125,6 +125,7 @@ GPU_TEMPLATE_DOUBLE = """
 // Runs on GPU only
 __device__
 inline double lerp(double v0, double v1, double t) {
+    //return t*v1 + (-t*v0 + v0);
     return fma(t, v1, fma(-t, v0, v0));
 }
 
@@ -340,7 +341,7 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
 		    bm_interp(crdtop_gpu, A_gpu, grid=grid, block=block, stream=stream)
 		    events[cc]['interpolate'].record(stream)
 
-		    #if c == 1 and t == 0:
+		    #if c == 1 and t == ntimes-1:
 		    	#print "A_GPU[0][0]", A_gpu.get()[0][0], "01", A_gpu.get()[0][1], "02", A_gpu.get()[0][2]
 
 
@@ -348,6 +349,12 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
 		    meas_eq(A_gpu, Isqrt_gpu, tau_gpu, real_dtype(freq), v_gpu, 
 			grid=grid, block=block, stream=stream)
 		    events[cc]['meas_eq'].record(stream)
+
+		    #if c == 1 and t == ntimes-1:
+		    	#print "MEAS_EQ OUTPUT:", v_gpu.get()[0][0]
+			#np.save("GPU", v_gpu.get())
+
+
 		    # compute vis = dot(v, v.T)
 		    # transpose below incurs about 20% overhead
 		    cublasZgemm(h, 'c', 'n', nant, nant, npixc, 1., v_gpu.gpudata, 
