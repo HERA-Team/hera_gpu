@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import pycuda.driver as cuda
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
@@ -17,12 +15,12 @@ def MedianFilter(input=None, kernel_size=3, bw=32, bh=32):
 	BLOCK_WIDTH = bw
 	BLOCK_HEIGHT = bh
 
-	if isinstance(kernel_size, (int, long)):
+	if isinstance(kernel_size, (int,)):
 		kernel_size = [kernel_size]*2
 
 	WS_x, WS_y = kernel_size
-	padding_y = WS_x/2
-	padding_x = WS_y/2
+	padding_y = WS_x//2
+	padding_x = WS_y//2
 
 	input_list = np.asarray(input_list)
 
@@ -301,8 +299,8 @@ def MedianFilter(input=None, kernel_size=3, bw=32, bh=32):
 			'y_stride' : BLOCK_HEIGHT * gridy,
 			'WSx' : WS_x,
 			'WSy' : WS_y,
-			'WSx/2' : WS_x/2,
-			'WSy/2' : WS_y/2,
+			'WSx/2' : WS_x//2,
+			'WSy/2' : WS_y//2,
 		}
 	mod = SourceModule(code)
 	#mf_shared = mod.get_function('mf_shared')
@@ -332,7 +330,7 @@ def MedianFilter(input=None, kernel_size=3, bw=32, bh=32):
 	#out_gpu_list = [cuda.mem_alloc(pinnedImg.nbytes) for pinnedImg in in_pin_list]
 	out_gpu_list = [None]*nStreams
 	mf.prepare("PPii")
-	for i in xrange(nStreams + 2):
+	for i in range(nStreams + 2):
 		ii = i - 1
 		iii = i - 2
 
