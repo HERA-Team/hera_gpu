@@ -5,7 +5,9 @@ import numpy as np
 from numpy.random import rand
 from scipy.interpolate import RectBivariateSpline
 import time
+from astropy.constants import c as speed_of_light
 
+ONE_OVER_C = 1.0/speed_of_light.value
 np.random.seed(0)
 NANT = 16
 NTIMES = 10
@@ -252,11 +254,26 @@ class TestVisGpu(unittest.TestCase):
                 v = vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=precision)
                 v_CPU = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=precision)
                 diff = np.abs(v - v_CPU)
-                if precision == 1:
+                if precision == 2:
                     self.assertLess(np.median(diff), 1e-4)
                 else:
                     self.assertLess(np.median(diff), 1e-2)
-
+    def test_compare_phase(self):
+        for i in range(NTIMES):
+            antpos = np.array(rand(NANT, 3), dtype=np.float32)
+            eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
+            crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
+            I_sky = np.array(rand(NPIX), dtype=np.float32)
+            bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
+            freq = float(rand(1)[0])
+            for precision in (1,2):
+                v = vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=precision)
+                v_CPU = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=precision)
+                phase_diff = np.abs(np.angle(v) - np.angle(v_CPU))
+                if precision == 2:
+                    self.assertLess(np.median(phase_diff), 1e-4)
+                else:
+                    self.assertLess(np.median(phase_diff), 1e-2)
 
 def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=1):
     """
@@ -320,6 +337,7 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=1):
 
         # Calculate delays
         np.dot(antpos, crd_top, out=tau)
+        tau *= ONE_OVER_C
         np.exp((1.0j * ang_freq) * tau, out=v)
 
         # Complex voltages

@@ -1,9 +1,12 @@
 import pycuda.autoinit
 from pycuda import compiler, gpuarray, driver
 from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy, cublasDgemm, cublasZgemm
+from astropy.constants import c as speed_of_light
 import numpy as np
 from math import ceil
 import time
+
+ONE_OVER_C = 1.0 / speed_of_light.value
 
 GPU_TEMPLATE = """
 // CUDA code for interpolating antenna beams and computing "voltage" visibilities 
@@ -228,8 +231,8 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
                 cublas_real_mm(h, 'n', 'n', npixc, 3, 3, 1., crd_eq_gpu.gpudata, 
                 npixc, eq2top_gpu.gpudata, 3, 0., crdtop_gpu.gpudata, npixc)
                 events[cc]['eq2top'].record(stream)
-                ## compute tau = dot(antpos,crdtop)
-                cublas_real_mm(h, 'n', 'n', npixc, nant, 3, 1., crdtop_gpu.gpudata, 
+                ## compute tau = dot(antpos,crdtop) / speed_of_light
+                cublas_real_mm(h, 'n', 'n', npixc, nant, 3, ONE_OVER_C, crdtop_gpu.gpudata, 
                 npixc, antpos_gpu.gpudata, 3, 0., tau_gpu.gpudata, npixc)
                 events[cc]['tau'].record(stream)
                 ## interpolate bm_tex at specified topocentric coords, store interpolation in A
