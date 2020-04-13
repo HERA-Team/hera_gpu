@@ -1,5 +1,5 @@
 import unittest
-import vis_gpu as vis
+import hera_gpu.vis as vis
 import numpy as np
 from numpy.random import rand
 from scipy.interpolate import RectBivariateSpline
@@ -14,118 +14,119 @@ NPIX = 12 * 16 ** 2
 class TestSpeed(unittest.TestCase):
     def test_small(self):
 
-    	NANT = 16
-	antpos = np.array(rand(NANT, 3), dtype=np.float32)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
-	I_sky = np.array(rand(NPIX), dtype=np.float32)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
-	freq = np.array(rand(1), dtype=np.float32)[0]
+        NANT = 16
+        antpos = np.array(rand(NANT, 3), dtype=np.float32)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
+        I_sky = np.array(rand(NPIX), dtype=np.float32)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
+        freq = np.array(rand(1), dtype=np.float32)[0]
 
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "SMALL GPU TIME (FLOAT):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=2)
+        print("SMALL GPU TIME (FLOAT):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "SMALL CPU TIME (FLOAT):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+        print("SMALL CPU TIME (FLOAT):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
 
-	antpos = np.array(rand(NANT, 3), dtype=np.float64)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
-	I_sky = np.array(rand(NPIX), dtype=np.float64)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
-	freq = np.array(rand(1), dtype=np.float64)[0]
+        antpos = np.array(rand(NANT, 3), dtype=np.float64)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
+        I_sky = np.array(rand(NPIX), dtype=np.float64)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
+        freq = np.array(rand(1), dtype=np.float64)[0]
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "SMALL GPU TIME (DOUBLE):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=2)
+        print("SMALL GPU TIME (DOUBLE):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "SMALL CPU TIME (DOUBLE):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+        print("SMALL CPU TIME (DOUBLE):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
 
 
     def test_512_ants(self):
-    	NANT = 512
-	NPIX = 12 * 16 ** 2
-	
-	antpos = np.array(rand(NANT, 3), dtype=np.float32)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
-	I_sky = np.array(rand(NPIX), dtype=np.float32)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
-	freq = np.array(rand(1), dtype=np.float32)[0]
+        NANT = 512
+        NPIX = 12 * 16 ** 2
+        
+        antpos = np.array(rand(NANT, 3), dtype=np.float32)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
+        I_sky = np.array(rand(NPIX), dtype=np.float32)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
+        freq = np.array(rand(1), dtype=np.float32)[0]
 
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
-	print "512 ANTS GPU TIME (FLOAT):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+        print("512 ANTS GPU TIME (FLOAT):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
-	print "512 ANTS CPU TIME (FLOAT):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+        print("512 ANTS CPU TIME (FLOAT):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
-	antpos = np.array(rand(NANT, 3), dtype=np.float64)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
-	I_sky = np.array(rand(NPIX), dtype=np.float64)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
-	freq = np.array(rand(1), dtype=np.float64)[0]
+        antpos = np.array(rand(NANT, 3), dtype=np.float64)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
+        I_sky = np.array(rand(NPIX), dtype=np.float64)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
+        freq = np.array(rand(1), dtype=np.float64)[0]
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "512 ANTS GPU TIME (DOUBLE):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=2)
+        print("512 ANTS GPU TIME (DOUBLE):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "512 ANTS CPU TIME (DOUBLE):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+        print("512 ANTS CPU TIME (DOUBLE):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
 
     def test_hera_350(self):
-    	NANT = 350
-	NPIX = int(3.14159 * 10 ** 5)
-	
-	antpos = np.array(rand(NANT, 3), dtype=np.float32)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
-	I_sky = np.array(rand(NPIX), dtype=np.float32)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
-	freq = np.array(rand(1), dtype=np.float32)[0]
+        NANT = 350
+        
+        NPIX = int(3.14159 * 10 ** 5)
+        
+        antpos = np.array(rand(NANT, 3), dtype=np.float32)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float32)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float32)
+        I_sky = np.array(rand(NPIX), dtype=np.float32)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float32)
+        freq = np.array(rand(1), dtype=np.float32)[0]
 
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
-	print "350 ANTS, PI*10^5 PIX GPU TIME (FLOAT):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+        print("350 ANTS, PI*10^5 PIX GPU TIME (FLOAT):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
-	print "350 ANTS, PI*10^5 PIX CPU TIME (FLOAT):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE",max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube)
+        print("350 ANTS, PI*10^5 PIX CPU TIME (FLOAT):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
 
-	antpos = np.array(rand(NANT, 3), dtype=np.float64)
-	eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
-	crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
-	I_sky = np.array(rand(NPIX), dtype=np.float64)
-	bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
-	freq = np.array(rand(1), dtype=np.float64)[0]
+        antpos = np.array(rand(NANT, 3), dtype=np.float64)
+        eq2tops = np.array(rand(NTIMES, 3, 3), dtype=np.float64)
+        crd_eq = np.array(rand(3, NPIX), dtype=np.float64)
+        I_sky = np.array(rand(NPIX), dtype=np.float64)
+        bm_cube = np.array(rand(NANT, BM_PIX, BM_PIX), dtype=np.float64)
+        freq = np.array(rand(1), dtype=np.float64)[0]
 
-	t = time.time()
-	v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "350 ANTS, PI*10^5 PIX GPU TIME (DOUBLE):", time.time() - t, "s"
+        t = time.time()
+        v_gpu = vis.vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, precision=2)
+        print("350 ANTS, PI*10^5 PIX GPU TIME (DOUBLE):", time.time() - t, "s")
 
-	t = time.time()
-	v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
-	print "350 ANTS, PI*10^5 CPU TIME (DOUBLE):", time.time() - t, "s"
-	print "MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu)
+        t = time.time()
+        v_cpu = vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float64, complex_dtype=np.complex128)
+        print("350 ANTS, PI*10^5 CPU TIME (DOUBLE):", time.time() - t, "s")
+        print("MAX REL DIFFERENCE", max_rel_diff(v_gpu, v_cpu))
 
 
 def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float32, complex_dtype=np.complex64):
@@ -177,14 +178,14 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float32
     # Loop over time samples
     for t, eq2top in enumerate(eq2tops.astype(real_dtype)):
         tx, ty, tz = crd_top = np.array(np.dot(eq2top, crd_eq))
-	for i in range(nant):
+        for i in range(nant):
             # Linear interpolation of primary beam pattern
             spline = RectBivariateSpline(bm_pix_y, bm_pix_x, bm_cube[i], kx=1, ky=1)
             A_s[i] = spline(ty, tx, grid=False)
         A_s = np.where(tz > 0, A_s, 0)
 
-	if t == ntimes-1:
-		print "CPU A_s[0][0]", A_s[0][0], "01", A_s[0][1], "02", A_s[0][2]
+    if t == ntimes-1:
+        print("CPU A_s[0][0]", A_s[0][0], "01", A_s[0][1], "02", A_s[0][2])
 
         # Calculate delays
         np.dot(antpos, crd_top, out=tau)
@@ -198,9 +199,9 @@ def vis_cpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube, real_dtype=np.float32
             np.dot(v[i : i + 1].conj(), v[i:].T, out=vis[t, i : i + 1, i:])
 
 
-	if t == ntimes-1:
-		print "CPU OUTPUT FOR CORRESPONDING VIS:", v[0][0]
-		np.save("CPU", v)
+    if t == ntimes-1:
+        print("CPU OUTPUT FOR CORRESPONDING VIS:", v[0][0])
+        np.save("CPU", v)
 
     # Conjugate visibilities
     np.conj(vis, out=vis)

@@ -21,7 +21,7 @@ setuptools.setup(
 	],
 	dependency_links=['https://github.com/HERA-Team/hera_sim'],
 	classifiers=(
-		"Programming Language :: Python :: 2",
+		"Programming Language :: Python :: 3",
 		"Operating System :: OS Independent",
 	)
 )
