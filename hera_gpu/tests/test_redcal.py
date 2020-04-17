@@ -95,7 +95,7 @@ class TestOmnicalSolver(unittest.TestCase):
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
-        shape = (1, 100000)
+        shape = (10, 10)
         gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
@@ -112,7 +112,25 @@ class TestOmnicalSolver(unittest.TestCase):
                 mdl = sol[(bl[0], 'Jxx')] * sol[(bl[1], 'Jxx')].conj() * ubl
                 np.testing.assert_almost_equal(np.abs(d_bl), np.abs(mdl), decimal=10)
                 np.testing.assert_almost_equal(np.angle(d_bl * mdl.conj()), 0, decimal=10)
-
+    def test_same(self):
+        NANTS = 10
+        antpos = linear_array(NANTS)
+        reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
+        info = redcal.RedundantCalibratorGPU(reds)
+        shape = (10, 10)
+        gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
+        w = dict([(k, 1.) for k in d.keys()])
+        sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
+        sol0.update(info.compute_ubls(d, sol0))
+        for precision in (1,2):
+            conv_crit = 1e-12
+            kwargs = {'maxiter': 100, 'check_after': 10,
+                'check_every': 4, 'gain': 0.3,
+                'conv_crit': conv_crit}
+            meta_gpu, sol_gpu = info.omnical_gpu(d, sol0, precision=precision, **kwargs)
+            meta_cpu, sol_cpu = info.omnical(d, sol0, **kwargs)
+            for k in sol_cpu:
+                np.testing.assert_almost_equal(sol_gpu[k], sol_cpu[k], decimal=5*precision)
 
 if __name__ == "__main__":
     unittest.main()
