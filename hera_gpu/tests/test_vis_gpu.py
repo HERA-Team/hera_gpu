@@ -218,7 +218,7 @@ class TestVisGpu(unittest.TestCase):
             # For co-located ants & sources on sky, answer should be sum of pixels
             v = vis_gpu(antpos, 1.0, eq2tops, crd_eq, I_sky, bm_cube,
                 precision=precision)
-            np.testing.assert_equal(v, NPIX)
+            np.testing.assert_almost_equal(v, NPIX, 22)
     
         # For co-located ants & two sources separated on sky, answer should still be sum
         crd_eq = np.zeros((3, 2))
