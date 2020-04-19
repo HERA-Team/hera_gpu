@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
 	name="hera_gpu",
-	version="2018.08.3",
+	version="2019.06.1",
 	author="Jackson Sipple",
 	author_email="jsipple@berkeley.edu",
 	description="Drop-in replacement functions that run on NVIDIA GPUs, parallelized for speed",
@@ -17,10 +17,11 @@ setuptools.setup(
 		'pycuda',
 		'numpy',
 		'scipy',
+		'scikit-cuda',
 	],
 	dependency_links=['https://github.com/HERA-Team/hera_sim'],
 	classifiers=(
-		"Programming Language :: Python :: 2",
+		"Programming Language :: Python :: 3",
 		"Operating System :: OS Independent",
 	)
 )
