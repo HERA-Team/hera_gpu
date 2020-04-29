@@ -125,7 +125,7 @@ __global__ void calc_gu_wgt(uint *ggu_indices, {CDTYPE} *dmdl, {DTYPE} *dwgts, {
 
     if (px < {NBLS}) {{
         idx = 3 * px;
-        //wf = mag2(dmdl[px]) * wgts[px];
+        //w = mag2(dmdl[px]) * wgts[px];
         w = dwgts[px];
         atomicAdd(&gwgt[ggu_indices[idx+0]], w);
         atomicAdd(&gwgt[ggu_indices[idx+1]], w);
@@ -382,12 +382,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
             events['loop_top'].record()
             if (i % check_every) == 1:
                 calc_dwgts_cuda(dmdl_gpu, wgts_gpu, dwgts_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
-                #calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil((nants+nubls)/nthreads)),1))
                 calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
             events['calc_gu_wgt'].record()
             events['calc_dw'].record()
             calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
-            #calc_gu_buf_cuda(ggu_indices_gpu, dw_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
             events['calc_gu_buf'].record()
             if (i < maxiter) and (i < check_after or (i % check_every != 0)):
                 # Fast branch
