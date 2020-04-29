@@ -195,52 +195,28 @@ __global__ void calc_dw({CDTYPE} *data, {DTYPE} *dwgts, {CDTYPE} *dmdl, {CDTYPE}
 }}
 
 // 
-//__global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *dw, {CDTYPE} *gbuf, {CDTYPE} *ubuf) {{
 __global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *data, {DTYPE} *dwgts, {CDTYPE} *dmdl, {CDTYPE} *gbuf, {CDTYPE} *ubuf) {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_BLS};
-    int chunk_size = {NBLS} - offset;
-    chunk_size = (chunk_size < {CHUNK_BLS}) ? chunk_size : {CHUNK_BLS};
+    const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     uint idx;
     {CDTYPE} d;
     {DTYPE} w;
 
-    //// Copy stuff into shared memory for faster access
-    //if (tx == 0) {{
-    //    //// Copy (gi,gj,uij) indices
-    //    //for (uint i=0; i < {NBLS} * 3; i++) {{
-    //    //    sh_inds[i] = ggu_indices[i];
-    //    //}}
-    if (tx == 1) {{
-        // Copy gbuf
-        for (uint i=0; i < {NANTS}; i++) {{
-            gbuf[i] = make_{CDTYPE}(0, 0);
-        }}
-    }} else if (tx == 2) {{
-        // Copy ubuf
-        for (uint i=0; i < {NUBLS}; i++) {{
-            ubuf[i] = make_{CDTYPE}(0, 0);
-        }}
+    // Initialize the buffers we will integrate into
+    if (px < {NANTS}) {{
+        gbuf[px] = make_{CDTYPE}(0, 0);
+    }}
+    if (px < {NUBLS}) {{
+        ubuf[px] = make_{CDTYPE}(0, 0);
     }}
 
-    //__syncthreads(); // make sure shared buffers are in place
+    __syncthreads(); // make sure buffers are cleared
 
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        idx = 3 * i;
-        w = dwgts[i] / mag2(dmdl[i]);
-        d = {CMULT}(data[i], {CONJ}(dmdl[i]));
+    if (px < {NBLS}) {{
+        idx = 3 * px;
+        w = dwgts[px] / mag2(dmdl[px]);
+        d = {CMULT}(data[px], {CONJ}(dmdl[px]));
         d.x = d.x * w;
         d.y = d.y * w;
-        //buf.x = data[i].x * dwgts[i];
-        //buf.y = data[i].y * dwgts[i];
-        //buf = {CDIV}(buf, dmdl[i]);
-        //buf = dw[i];
-        //atomicAdd(&sh_gains[ggu_indices[idx+0]].x,  buf.x);
-        //atomicAdd(&sh_gains[ggu_indices[idx+0]].y,  buf.y);
-        //atomicAdd(&sh_gains[ggu_indices[idx+1]].x,  buf.x);
-        //atomicAdd(&sh_gains[ggu_indices[idx+1]].y, -buf.y);
-        //atomicAdd( &sh_ubls[ggu_indices[idx+2]].x,   buf.x);
-        //atomicAdd( &sh_ubls[ggu_indices[idx+2]].y,   buf.y);
         atomicAdd(&gbuf[ggu_indices[idx+0]].x,  d.x);
         atomicAdd(&gbuf[ggu_indices[idx+0]].y,  d.y);
         atomicAdd(&gbuf[ggu_indices[idx+1]].x,  d.x);
@@ -248,56 +224,6 @@ __global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *data, {DTYPE} *dwgts, {
         atomicAdd(&ubuf[ggu_indices[idx+2]].x,  d.x);
         atomicAdd(&ubuf[ggu_indices[idx+2]].y,  d.y);
     }}
-
-    //wc.x = 0;
-    //wc.y = 0;
-    //if (px < {NANTS}) {{
-    //    for (uint i=0; i < {NBLS}; i++) {{
-    //        idx = 3 * i;
-    //        if (sh_inds[idx+0] == px) {{
-    //            dw.x = data[i].x * dwgts[i];
-    //            dw.y = data[i].y * dwgts[i];
-    //            dw = {CDIV}(dw, dmdl[i]);
-    //            wc.x += dw.x;
-    //            wc.y += dw.y;
-    //        }}
-    //        if (sh_inds[idx+1] == px) {{
-    //            dw.x = data[i].x * dwgts[i];
-    //            dw.y = data[i].y * dwgts[i];
-    //            dw = {CDIV}(dw, dmdl[i]);
-    //            wc.x += dw.x;
-    //            wc.y -= dw.y; // conjugate
-    //        }}
-    //    }}
-    //    gbuf[px] = wc;
-    //}} else if (px < {NANTS} + {NUBLS}) {{
-    //    px -= {NANTS};
-    //    for (uint i=0; i < {NBLS}; i++) {{
-    //        idx = 3 * i;
-    //        if (sh_inds[idx+2] == px) {{
-    //            dw.x = data[i].x * dwgts[i];
-    //            dw.y = data[i].y * dwgts[i];
-    //            dw = {CDIV}(dw, dmdl[i]);
-    //            wc.x += dw.x;
-    //            wc.y += dw.y;
-    //        }}
-    //    }}
-    //    ubuf[px] = wc;
-    //}}
-
-    //__syncthreads(); // make sure everyone is done before clearing bufs
-
-    //if (tx == 1) {{
-    //    // Copy gbuf
-    //    for (uint i=0; i < {NANTS}; i++) {{
-    //        gbuf[i] = sh_gains[i];
-    //    }}
-    //}} else if (tx == 2) {{
-    //    // Copy ubuf
-    //    for (uint i=0; i < {NUBLS}; i++) {{
-    //        ubuf[i] = sh_ubls[i];
-    //    }}
-    //}}
 }}
 
 
@@ -423,8 +349,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     gains = gains.astype(complex_dtype)
     ubls = ubls.astype(complex_dtype)
     
-    nthreads = 512 # XXX
-    #nthreads = 16 # XXX
+    #nthreads = 512 # XXX
+    nthreads = 16 # XXX
     # Build the CUDA code
     # Choose to use single or double precision CUDA code
     gpu_code = GPU_TEMPLATE.format(**{
@@ -525,7 +451,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
             #dw_gpu = linalg.multiply(data_gpu, dwgts_gpu)
             #dw_gpu = skcuda.misc.divide(dw_gpu, dmdl_gpu)
             events['calc_dw'].record()
-            calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
+            #calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
+            calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
             #calc_gu_buf_cuda(ggu_indices_gpu, dw_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
             events['calc_gu_buf'].record()
             if (i < maxiter) and (i < check_after or (i % check_every != 0)):
