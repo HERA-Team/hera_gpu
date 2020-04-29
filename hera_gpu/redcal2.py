@@ -109,88 +109,27 @@ __global__ void calc_dwgts({CDTYPE} *dmdl, {DTYPE} *wgts, {DTYPE} *dwgts) {{
 
 //
 __global__ void calc_gu_wgt(uint *ggu_indices, {CDTYPE} *dmdl, {DTYPE} *dwgts, {DTYPE} *gwgt, {DTYPE} *uwgt) {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_BLS};
-    int chunk_size = {NBLS} - offset;
-    chunk_size = (chunk_size < {CHUNK_BLS}) ? chunk_size : {CHUNK_BLS};
+    const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     uint idx;
-    {DTYPE} wf=0;
-
-    // Copy stuff into shared memory for faster access
-    if (tx == 0) {{
-        // Copy (gi,gj,uij) indices
-        for (uint i=0; i < {NBLS} * 3; i++) {{
-            sh_inds[i] = ggu_indices[i];
-        }}
-    }} else if (tx == 1) {{
-        // Copy gbuf
-        for (uint i=0; i < {NANTS}; i++) {{
-            sh_gains[i].x = 0;
-        }}
-    }} else if (tx == 2) {{
-        // Copy ubuf
-        for (uint i=0; i < {NUBLS}; i++) {{
-            sh_ubls[i].x = 0;
-        }}
-    }}
-
-    __syncthreads(); // make sure shared buffers are in place
-
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        idx = 3 * i;
-        //wf = mag2(dmdl[i]) * wgts[i];
-        wf = dwgts[i];
-        atomicAdd(&sh_gains[sh_inds[idx+0]].x, wf);
-        atomicAdd(&sh_gains[sh_inds[idx+1]].x, wf);
-        atomicAdd(&sh_ubls[sh_inds[idx+2]].x, wf);
-    }}
-
-    //if (px < {NANTS}) {{
-    //    for (uint i=0; i < {NBLS}; i++) {{
-    //        idx = 3 * i;
-    //        if (sh_inds[idx+0] == px) {{
-    //            wf += dwgts[i];
-    //        }}
-    //        if (sh_inds[idx+1] == px) {{
-    //            wf += dwgts[i];
-    //        }}
-    //    }}
-    //    gwgt[px] = wf;
-    //}} else if (px < {NANTS} + {NUBLS}) {{
-    //    px -= {NANTS};
-    //    for (uint i=0; i < {NBLS}; i++) {{
-    //        idx = 3 * i;
-    //        if (sh_inds[idx+2] == px) {{
-    //            wf += dwgts[i];
-    //        }}
-    //    }}
-    //    uwgt[px] = wf;
-    //}}
-
-    __syncthreads(); // make sure everyone is done before clearing bufs
-
-    if (tx == 1) {{
-        // Copy gbuf
-        for (uint i=0; i < {NANTS}; i++) {{
-            gwgt[i] = sh_gains[i].x;
-        }}
-    }} else if (tx == 2) {{
-        // Copy ubuf
-        for (uint i=0; i < {NUBLS}; i++) {{
-            uwgt[i] = sh_ubls[i].x;
-        }}
-    }}
-}}
-
-__global__ void calc_dw({CDTYPE} *data, {DTYPE} *dwgts, {CDTYPE} *dmdl, {CDTYPE} *dw) {{
-    const uint i = blockIdx.x * blockDim.x + threadIdx.x;
     {DTYPE} w;
-    {CDTYPE} d;
-    if (i < {NBLS}) {{
-        w = dwgts[i] / mag2(dmdl[i]);
-        d = {CMULT}(data[i], {CONJ}(dmdl[i]));
-        dw[i].x = d.x * w;
-        dw[i].y = d.y * w;
+
+    // Initialize the buffers we will integrate into
+    if (px < {NANTS}) {{
+        gwgt[px] = 0;
+    }}
+    if (px < {NUBLS}) {{
+        uwgt[px] = 0;
+    }}
+
+    __syncthreads(); // make sure buffers are cleared
+
+    if (px < {NBLS}) {{
+        idx = 3 * px;
+        //wf = mag2(dmdl[px]) * wgts[px];
+        w = dwgts[px];
+        atomicAdd(&gwgt[ggu_indices[idx+0]], w);
+        atomicAdd(&gwgt[ggu_indices[idx+1]], w);
+        atomicAdd(&uwgt[ggu_indices[idx+2]], w);
     }}
 }}
 
@@ -375,7 +314,6 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     calc_chisq_cuda = gpu_module.get_function("calc_chisq")
     calc_dwgts_cuda = gpu_module.get_function("calc_dwgts")
     calc_gu_wgt_cuda = gpu_module.get_function("calc_gu_wgt")
-    calc_dw_cuda = gpu_module.get_function("calc_dw")
     calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
     update_gains_cuda = gpu_module.get_function("update_gains")
     update_ubls_cuda = gpu_module.get_function("update_ubls")
@@ -444,14 +382,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
             events['loop_top'].record()
             if (i % check_every) == 1:
                 calc_dwgts_cuda(dmdl_gpu, wgts_gpu, dwgts_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
-                calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil((nants+nubls)/nthreads)),1))
+                #calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil((nants+nubls)/nthreads)),1))
+                calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
             events['calc_gu_wgt'].record()
-            #calc_dw_cuda(data_gpu, dwgts_gpu, dmdl_gpu, dw_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
-            #calc_dw_cuda(data_gpu, dwgts_gpu, dmdl_gpu, dw_gpu, block=(nthreads,1,1), grid=(1,1))
-            #dw_gpu = linalg.multiply(data_gpu, dwgts_gpu)
-            #dw_gpu = skcuda.misc.divide(dw_gpu, dmdl_gpu)
             events['calc_dw'].record()
-            #calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
             calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
             #calc_gu_buf_cuda(ggu_indices_gpu, dw_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
             events['calc_gu_buf'].record()
