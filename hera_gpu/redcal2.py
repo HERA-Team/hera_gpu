@@ -24,11 +24,6 @@ GPU_TEMPLATE = """
 #include <pycuda-helpers.hpp>
 #include <stdio.h>
 
-// Shared memory for storing baseline order reused among all cells
-__shared__ uint sh_inds[{NBLS}*3];
-__shared__ {CDTYPE} sh_gains[{NANTS}];
-__shared__ {CDTYPE} sh_ubls[{NUBLS}];
-
 __device__ inline {DTYPE} mag2({CDTYPE} a) {{
     return a.x * a.x + a.y * a.y;
 }}
@@ -36,67 +31,30 @@ __device__ inline {DTYPE} mag2({CDTYPE} a) {{
 //
 __global__ void gen_dmdl(uint *ggu_indices, {CDTYPE} *gains, {CDTYPE} *ubls, {CDTYPE} *dmdl)
 {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_BLS};
-    int chunk_size = {NBLS} - offset;
+    const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     uint idx;
-    chunk_size = (chunk_size < {CHUNK_BLS}) ? chunk_size : {CHUNK_BLS};
-    
-    // Copy stuff into shared memory for faster access
-    if (tx == 0) {{
-        // Copy (gi,gj,uij) indices
-        for (uint i=0; i < {NBLS} * 3; i++) {{
-            sh_inds[i] = ggu_indices[i];
-        }}
-    }} else if (tx == 1) {{
-        // Copy gains
-        for (uint i=0; i < {NANTS}; i++) {{
-            sh_gains[i] = gains[i];
-        }}
-    }} else if (tx == 2) {{
-        // Copy unique baselines
-        for (uint i=0; i < {NUBLS}; i++) {{
-            sh_ubls[i] = ubls[i];
-        }}
-    }}
 
-    __syncthreads(); // Make sure everything is copied
-
-    if (chunk_size <= 0) {{
-        return;
+    if (px < {NBLS}) {{
+        idx = 3 * px;
+        dmdl[px] = {CMULT}({CMULT}(gains[ggu_indices[idx+0]], {CONJ}(gains[ggu_indices[idx+1]])), ubls[ggu_indices[idx+2]]);
     }}
-    // Calculate dmdl = gi * gj.conj * ubl
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        idx = 3 * i;
-        dmdl[i] = {CMULT}({CMULT}(sh_gains[sh_inds[idx+0]], {CONJ}(sh_gains[sh_inds[idx+1]])), sh_ubls[sh_inds[idx+2]]);
-    }}
-
-    __syncthreads(); // make sure everyone used mem before kicking out
 }}
 
 
 __global__ void calc_chisq({CDTYPE} *data, {CDTYPE} *dmdl, {DTYPE} *wgts, {DTYPE} *chisq) {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_BLS};
-    int chunk_size = {NBLS} - offset;
-    chunk_size = (chunk_size < {CHUNK_BLS}) ? chunk_size : {CHUNK_BLS};
-    {DTYPE} _chisq=0;
+    const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     {CDTYPE} diff;
 
-    if (tx == 0) {{
+    if (px == 0) {{
         chisq[0] = 0;
     }}
 
     __syncthreads(); // Make sure chisq is zeroed before continuing
-    
-    if (chunk_size <= 0) {{
-        return;
+
+    if (px < {NBLS}) {{
+        diff = {CSUB}(data[px], dmdl[px]);
+        atomicAdd(chisq, mag2(diff) * wgts[px]);
     }}
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        diff = {CSUB}(data[i], dmdl[i]);
-        _chisq += mag2(diff) * wgts[i];
-    }}
-    atomicAdd(chisq, _chisq);
 }}
 
 //
@@ -187,53 +145,34 @@ __global__ void update_ubls({CDTYPE} *ubuf, {DTYPE} *uwgt, {CDTYPE} *ubls, float
     }}
 }}
 
-__global__ void calc_conv_gains({CDTYPE} *new_gains, {CDTYPE} *old_gains, {DTYPE} *conv_sum, {DTYPE} *conv_wgt) {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_ANT};
-    int chunk_size = {NANTS} - offset;
-    chunk_size = (chunk_size < {CHUNK_ANT}) ? chunk_size : {CHUNK_ANT};
-    {DTYPE} _conv_sum=0, _conv_wgt=0;
+__global__ void calc_conv({CDTYPE} *new_gains, {CDTYPE} *old_gains, {CDTYPE} *new_ubls, {CDTYPE} *old_ubls, {DTYPE} *conv_sum, {DTYPE} *conv_wgt) {{
+    const uint px = blockIdx.x * blockDim.x + threadIdx.x;
+
+    //const uint tx = threadIdx.x;
+    //const uint offset = tx * {CHUNK_ANT};
+    //int chunk_size = {NANTS} - offset;
+    //chunk_size = (chunk_size < {CHUNK_ANT}) ? chunk_size : {CHUNK_ANT};
+    //{DTYPE} _conv_sum=0, _conv_wgt=0;
     {CDTYPE} wc;
 
-    if (tx == 0) {{
+    if (px == 0) {{
         conv_sum[0] = 0;
         conv_wgt[0] = 0;
     }}
 
     __syncthreads(); // Make sure conv buffers are cleared
-
-    if (chunk_size <= 0) {{
-        return;
+    
+    if (px < {NANTS}) {{
+        wc = {CSUB}(new_gains[px], old_gains[px]);
+        atomicAdd(conv_sum, mag2(wc));
+        atomicAdd(conv_wgt, mag2(new_gains[px]));
     }}
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        wc = {CSUB}(new_gains[i], old_gains[i]);
-        _conv_sum += mag2(wc);
-        _conv_wgt += mag2(new_gains[i]);
-    }}
-    atomicAdd(conv_sum, _conv_sum);
-    atomicAdd(conv_wgt, _conv_wgt);
-}}
 
-__global__ void calc_conv_ubls({CDTYPE} *new_ubls, {CDTYPE} *old_ubls, {DTYPE} *conv_sum, {DTYPE} *conv_wgt) {{
-    const uint tx = threadIdx.x;
-    const uint offset = tx * {CHUNK_UBL};
-    int chunk_size = {NUBLS} - offset;
-    chunk_size = (chunk_size < {CHUNK_UBL}) ? chunk_size : {CHUNK_UBL};
-    {DTYPE} _conv_sum=0, _conv_wgt = 0;
-    {CDTYPE} wc;
-
-    // Purposely not zeroing conv buffers: have to cal calc_conv_gains first
-
-    if (chunk_size <= 0) {{
-        return;
+    if (px < {NUBLS}) {{
+        wc = {CSUB}(new_ubls[px], old_ubls[px]);
+        atomicAdd(conv_sum, mag2(wc));
+        atomicAdd(conv_wgt, mag2(new_ubls[px]));
     }}
-    for (uint i=offset; i < offset + chunk_size; i++) {{
-        wc = {CSUB}(new_ubls[i], old_ubls[i]);
-        _conv_sum += mag2(wc);
-        _conv_wgt += mag2(new_ubls[i]);
-    }}
-    atomicAdd(conv_sum, _conv_sum);
-    atomicAdd(conv_wgt, _conv_wgt);
 }}
 """
 
@@ -317,8 +256,7 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
     update_gains_cuda = gpu_module.get_function("update_gains")
     update_ubls_cuda = gpu_module.get_function("update_ubls")
-    calc_conv_gains_cuda = gpu_module.get_function("calc_conv_gains")
-    calc_conv_ubls_cuda = gpu_module.get_function("calc_conv_ubls")
+    calc_conv_cuda = gpu_module.get_function("calc_conv")
     h = cublasCreate() # handle for managing cublas
     linalg.init()
 
@@ -368,15 +306,16 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
         wgts_gpu.set_async(wgts[:,px])
         events['upload'].record()
 
-        gen_dmdl_cuda(ggu_indices_gpu, gains_gpu, ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(1,1))
+        gen_dmdl_cuda(ggu_indices_gpu, gains_gpu, ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
         events['dmdl'].record()
-        calc_chisq_cuda(data_gpu, dmdl_gpu, wgts_gpu, chisq_gpu, block=(nthreads,1,1), grid=(1,1))
+        calc_chisq_cuda(data_gpu, dmdl_gpu, wgts_gpu, chisq_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
         events['chisq'].record()
         chisq_gpu.get_async(ary=_chisq)
         events['get_chisq'].record()
-        time.sleep(.01)
-        for (e1,e2) in event_pairs[:4]:
-            cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
+        if True:
+            time.sleep(.01)
+            for (e1,e2) in event_pairs[:4]:
+                cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
 
         for i in range(1,maxiter+1):
             events['loop_top'].record()
@@ -395,18 +334,19 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 events['update_gains'].record()
                 update_ubls_cuda(ubuf_gpu, uwgt_gpu, ubls_gpu, np.float32(gain), block=(nthreads,1,1), grid=(int(ceil(nubls/nthreads)),1))
                 events['update_ubls'].record()
-                gen_dmdl_cuda(ggu_indices_gpu, gains_gpu, ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(1,1))
                 events['calc_conv_gains'].record()
                 events['calc_conv_ubls'].record()
                 events['get_conv'].record()
+                gen_dmdl_cuda(ggu_indices_gpu, gains_gpu, ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
                 events['dmdl2'].record()
                 events['chisq2'].record()
                 events['get_chisq2'].record()
                 events['copy2'].record()
                 events['end'].record()
-                time.sleep(.01)
-                for (e1,e2) in event_pairs[5:]:
-                    cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
+                if True:
+                    time.sleep(.01)
+                    for (e1,e2) in event_pairs[5:]:
+                        cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
 
                 if False:
                     print('Fast Iteration:', i)
@@ -424,9 +364,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 events['update_gains'].record()
                 update_ubls_cuda(ubuf_gpu, uwgt_gpu, new_ubls_gpu, np.float32(gain), block=(nthreads,1,1), grid=(int(ceil(nubls/nthreads)),1))
                 events['update_ubls'].record()
-                calc_conv_gains_cuda(new_gains_gpu, gains_gpu, conv_sum_gpu, conv_wgt_gpu, block=(nthreads,1,1), grid=(1,1))
+                calc_conv_cuda(new_gains_gpu, gains_gpu, new_ubls_gpu, ubls_gpu, conv_sum_gpu, conv_wgt_gpu, block=(nthreads,1,1), grid=(int(ceil(max(nants, nubls)/nthreads)),1))
                 events['calc_conv_gains'].record()
-                calc_conv_ubls_cuda(new_ubls_gpu, ubls_gpu, conv_sum_gpu, conv_wgt_gpu, block=(nthreads,1,1), grid=(1,1))
                 events['calc_conv_ubls'].record()
                 conv_sum_gpu.get_async(ary=conv_sum)
                 conv_wgt_gpu.get_async(ary=conv_wgt)
@@ -436,9 +375,9 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 if _conv < conv_crit:
                     break
                 
-                gen_dmdl_cuda(ggu_indices_gpu, new_gains_gpu, new_ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(1,1))
+                gen_dmdl_cuda(ggu_indices_gpu, new_gains_gpu, new_ubls_gpu, dmdl_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
                 events['dmdl2'].record()
-                calc_chisq_cuda(data_gpu, dmdl_gpu, wgts_gpu, new_chisq_gpu, block=(nthreads,1,1), grid=(1,1))
+                calc_chisq_cuda(data_gpu, dmdl_gpu, wgts_gpu, new_chisq_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
                 events['chisq2'].record()
 
                 
@@ -452,9 +391,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 events['copy2'].record()
                 chisq_gpu = new_chisq_gpu
                 events['end'].record()
-                time.sleep(.01)
-                for (e1,e2) in event_pairs[5:]:
-                    cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
+                if True:
+                    time.sleep(.01)
+                    for (e1,e2) in event_pairs[5:]:
+                        cum_time[(e1,e2)] = cum_time.get((e1,e2), 0) + events[e2].time_since(events[e1])
                 if False:
                     print('Slow Iteration:', i)
                     for (e1,e2) in event_pairs[5:]:
@@ -469,15 +409,16 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
         gains_gpu.get_async(ary=gains[:,px])
         ubls_gpu.get_async(ary=ubls[:,px])
     t1 = time.time()
-    print('Final, nthreads=%d' % nthreads)
-    for (e1,e2) in event_pairs:
-        try:
-            print('%6.3f' % cum_time[(e1,e2)], e1, e2)
-        except(KeyError):
-            pass
+    if True:
+        print('Final, nthreads=%d' % nthreads)
+        for (e1,e2) in event_pairs:
+            try:
+                print('%6.3f' % cum_time[(e1,e2)], e1, e2)
+            except(KeyError):
+                pass
     print(t1 - t0)
     print()
-    time.sleep(0.5)
+    #time.sleep(0.5)
     
     cublasDestroy(h) # teardown GPU configuration
     return {'gains':gains, 'ubls':ubls, 'chisq':chisq, 'iters':iters,

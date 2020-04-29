@@ -122,7 +122,10 @@ class TestOmnicalSolver(unittest.TestCase):
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
         sol0.update(info.compute_ubls(d, sol0))
+        import time
+        t0 = time.time()
         meta, sol = info.omnical_gpu(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
+        print('Finished in:', time.time() - t0)
         #meta, sol = info.omnical(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
         for i in range(NANTS):
             assert sol[(i, 'Jxx')].shape == shape
