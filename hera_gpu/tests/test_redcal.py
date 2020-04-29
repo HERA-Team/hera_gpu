@@ -91,7 +91,7 @@ class TestRedcalCuda(unittest.TestCase):
 
 class TestOmnicalSolver(unittest.TestCase):
     def test_wrap(self):
-        NANTS = 18
+        NANTS = 18 * 3
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)

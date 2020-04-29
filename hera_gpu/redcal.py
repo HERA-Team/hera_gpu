@@ -299,22 +299,40 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     conv = np.empty((ndata,), dtype=real_dtype)
     iters = np.empty((ndata,), dtype=np.uint32)
     
+    import time
+    t0 = time.time()
+    event_order = ('start', 'upload', 'omni', 'download', 'end')
+    events = {e:driver.Event() for e in event_order}
+    events['start'].record()
     ggu_indices_gpu.set_async(ggu_indices)
     gains_gpu.set_async(gains)
     ubls_gpu.set_async(ubls)
     data_gpu.set_async(data)
     wgts_gpu.set_async(wgts)
+    events['upload'].record()
     
     omnical_cuda(ggu_indices_gpu, gains_gpu, ubls_gpu, data_gpu, wgts_gpu,
             chisq_gpu, iters_gpu, conv_gpu, np.float32(conv_crit), 
             np.uint32(maxiter), np.uint32(check_every), np.uint32(check_after),
             grid=grid, block=block)
+    events['omni'].record()
 
     gains_gpu.get_async(ary=gains)
     ubls_gpu.get_async(ary=ubls)
     chisq_gpu.get_async(ary=chisq)
     iters_gpu.get_async(ary=iters)
     conv_gpu.get_async(ary=conv)
+    events['download'].record()
+    events['end'].record()
+    events['end'].synchronize()
+    for i in range(len(event_order)-1):
+        e1,e2 = event_order[i], event_order[i+1]
+        print(e1, e2, events[e2].time_since(events[e1]))
+    e1,e2 = 'start', 'end'
+    print(e1, e2, events[e2].time_since(events[e1]))
+    t1 = time.time()
+    print(t1-t0)
+
 
     # teardown GPU configuration
     return {'gains':gains, 'ubls':ubls, 'chisq':chisq, 'iters':iters,
