@@ -194,15 +194,16 @@ __global__ void calc_dw({CDTYPE} *data, {DTYPE} *dwgts, {CDTYPE} *dmdl, {CDTYPE}
     }}
 }}
 
-
 // 
-__global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *dw, {CDTYPE} *gbuf, {CDTYPE} *ubuf) {{
+//__global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *dw, {CDTYPE} *gbuf, {CDTYPE} *ubuf) {{
+__global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *data, {DTYPE} *dwgts, {CDTYPE} *dmdl, {CDTYPE} *gbuf, {CDTYPE} *ubuf) {{
     const uint tx = threadIdx.x;
     const uint offset = tx * {CHUNK_BLS};
     int chunk_size = {NBLS} - offset;
     chunk_size = (chunk_size < {CHUNK_BLS}) ? chunk_size : {CHUNK_BLS};
     uint idx;
-    {CDTYPE} buf;
+    {CDTYPE} d;
+    {DTYPE} w;
 
     //// Copy stuff into shared memory for faster access
     //if (tx == 0) {{
@@ -222,26 +223,30 @@ __global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *dw, {CDTYPE} *gbuf, {CD
         }}
     }}
 
-    __syncthreads(); // make sure shared buffers are in place
+    //__syncthreads(); // make sure shared buffers are in place
 
     for (uint i=offset; i < offset + chunk_size; i++) {{
         idx = 3 * i;
-        //dw.x = data[i].x * dwgts[i];
-        //dw.y = data[i].y * dwgts[i];
-        //dw = {CDIV}(dw, dmdl[i]);
-        buf = dw[i];
+        w = dwgts[i] / mag2(dmdl[i]);
+        d = {CMULT}(data[i], {CONJ}(dmdl[i]));
+        d.x = d.x * w;
+        d.y = d.y * w;
+        //buf.x = data[i].x * dwgts[i];
+        //buf.y = data[i].y * dwgts[i];
+        //buf = {CDIV}(buf, dmdl[i]);
+        //buf = dw[i];
         //atomicAdd(&sh_gains[ggu_indices[idx+0]].x,  buf.x);
         //atomicAdd(&sh_gains[ggu_indices[idx+0]].y,  buf.y);
         //atomicAdd(&sh_gains[ggu_indices[idx+1]].x,  buf.x);
         //atomicAdd(&sh_gains[ggu_indices[idx+1]].y, -buf.y);
         //atomicAdd( &sh_ubls[ggu_indices[idx+2]].x,   buf.x);
         //atomicAdd( &sh_ubls[ggu_indices[idx+2]].y,   buf.y);
-        atomicAdd(&gbuf[ggu_indices[idx+0]].x,  buf.x);
-        atomicAdd(&gbuf[ggu_indices[idx+0]].y,  buf.y);
-        atomicAdd(&gbuf[ggu_indices[idx+1]].x,  buf.x);
-        atomicAdd(&gbuf[ggu_indices[idx+1]].y, -buf.y);
-        atomicAdd(&ubuf[ggu_indices[idx+2]].x,   buf.x);
-        atomicAdd(&ubuf[ggu_indices[idx+2]].y,   buf.y);
+        atomicAdd(&gbuf[ggu_indices[idx+0]].x,  d.x);
+        atomicAdd(&gbuf[ggu_indices[idx+0]].y,  d.y);
+        atomicAdd(&gbuf[ggu_indices[idx+1]].x,  d.x);
+        atomicAdd(&gbuf[ggu_indices[idx+1]].y, -d.y);
+        atomicAdd(&ubuf[ggu_indices[idx+2]].x,  d.x);
+        atomicAdd(&ubuf[ggu_indices[idx+2]].y,  d.y);
     }}
 
     //wc.x = 0;
@@ -418,8 +423,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     gains = gains.astype(complex_dtype)
     ubls = ubls.astype(complex_dtype)
     
-    #nthreads = 512 # XXX
-    nthreads = 16 # XXX
+    nthreads = 512 # XXX
+    #nthreads = 16 # XXX
     # Build the CUDA code
     # Choose to use single or double precision CUDA code
     gpu_code = GPU_TEMPLATE.format(**{
@@ -515,13 +520,13 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 calc_dwgts_cuda(dmdl_gpu, wgts_gpu, dwgts_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
                 calc_gu_wgt_cuda(ggu_indices_gpu, dmdl_gpu, dwgts_gpu, gwgt_gpu, uwgt_gpu, block=(nthreads,1,1), grid=(int(ceil((nants+nubls)/nthreads)),1))
             events['calc_gu_wgt'].record()
-            calc_dw_cuda(data_gpu, dwgts_gpu, dmdl_gpu, dw_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
+            #calc_dw_cuda(data_gpu, dwgts_gpu, dmdl_gpu, dw_gpu, block=(nthreads,1,1), grid=(int(ceil(nbls/nthreads)),1))
             #calc_dw_cuda(data_gpu, dwgts_gpu, dmdl_gpu, dw_gpu, block=(nthreads,1,1), grid=(1,1))
             #dw_gpu = linalg.multiply(data_gpu, dwgts_gpu)
             #dw_gpu = skcuda.misc.divide(dw_gpu, dmdl_gpu)
             events['calc_dw'].record()
-            #calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
-            calc_gu_buf_cuda(ggu_indices_gpu, dw_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
+            calc_gu_buf_cuda(ggu_indices_gpu, data_gpu, dwgts_gpu, dmdl_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
+            #calc_gu_buf_cuda(ggu_indices_gpu, dw_gpu, gbuf_gpu, ubuf_gpu, block=(nthreads,1,1), grid=(1,1))
             events['calc_gu_buf'].record()
             if (i < maxiter) and (i < check_after or (i % check_every != 0)):
                 # Fast branch
