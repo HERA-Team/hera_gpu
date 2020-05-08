@@ -683,8 +683,38 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     return {'gains':gains, 'ubls':ubls, 'chisq':chisq, 'iters':iters,
             'conv':conv}
 
+
 class OmnicalSolverGPU(OmnicalSolver):
-    def solve_iteratively(self, conv_crit=1e-10, maxiter=50, check_every=4, check_after=1, precision=None, verbose=False):
+    def solve_iteratively(self, conv_crit=1e-10, maxiter=50,
+            check_every=4, check_after=1, precision=None, verbose=False):
+        """Repeatedly solves and updates solution until convergence or 
+        maxiter is reached.  Returns a meta-data about the solution and 
+        the solution itself. THIS IS A DROP_IN REPLACEMENT FOR
+        hera_cal.redcal.OmnicalSolver.solve_iteratively
+
+        Args:
+            conv_crit: A convergence criterion (default 1e-10) below which 
+                to stop iterating.  Converegence is measured L2-norm of 
+                the change in the solution of all the variables divided by 
+                the L2-norm of the solution itself.
+            maxiter: An integer maximum number of iterations to perform 
+                before quitting. Default 50.
+            check_every: Compute convergence and updates weights every Nth 
+                iteration (saves computation). Default 4.
+            check_after: Start computing convergence and updating weights 
+                after the first N iterations.  Default 1.
+
+        Returns: meta, sol
+            meta: a dictionary with metadata about the solution, including
+                iter: the number of iterations taken to reach convergence 
+                    (or maxiter), with dimensions of the data.
+                chisq: the chi^2 of the solution produced by the final 
+                    iteration, with dimensions of the data.
+                conv_crit: the convergence criterion evaluated at the final
+                    iteration, with dimensions of the data.
+            sol: a dictionary of complex solutions with variables as keys, 
+                    with dimensions of the data.
+        """
         sol = self.sol0
         terms = [(get_name(gi), get_name(gj), get_name(uij))
                   for term in self.all_terms for (gi, gj, uij) in term]
@@ -735,7 +765,8 @@ class OmnicalSolverGPU(OmnicalSolver):
 class RedundantCalibratorGPU(RedundantCalibrator):
     def omnical_gpu(self, data, sol0, wgts={}, gain=.3, conv_crit=1e-10, maxiter=50, check_every=4, check_after=1, precision=None):
         """Use the Liu et al 2010 Omnical algorithm to linearize 
-            equations and iteratively minimize chi^2.
+        equations and iteratively minimize chi^2. THIS IS A DROP-IN
+        REPLACEMENT FOR hera_cal.redcal.RedundantCalibrator.omnical
  
         Args:
             data: visibility data in the dictionary format 
