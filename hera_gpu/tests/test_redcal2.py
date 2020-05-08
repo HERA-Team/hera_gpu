@@ -27,6 +27,7 @@ class TestRedcalCuda(unittest.TestCase):
             'CDIV': 'cuCdivf',
             'DTYPE': 'float',
             'CDTYPE': 'cuFloatComplex',
+            'CHUNK_SIZE': 10,
             'CHUNK_BLS': 10,
             'CHUNK_ANT': 10,
             'CHUNK_UBL': 10,
@@ -39,8 +40,7 @@ class TestRedcalCuda(unittest.TestCase):
         calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
         update_gains_cuda = gpu_module.get_function("update_gains")
         update_ubls_cuda = gpu_module.get_function("update_ubls")
-        calc_conv_gains_cuda = gpu_module.get_function("calc_conv_gains")
-        calc_conv_ubls_cuda = gpu_module.get_function("calc_conv_ubls")
+        calc_conv_gains_cuda = gpu_module.get_function("calc_conv")
     def test_double_compile(self):
         gpu_code = redcal.GPU_TEMPLATE.format(**{
             'NDATA': NDATA,
@@ -54,6 +54,7 @@ class TestRedcalCuda(unittest.TestCase):
             'CDIV': 'cuCdiv',
             'DTYPE': 'double',
             'CDTYPE': 'cuDoubleComplex',
+            'CHUNK_SIZE': 10,
             'CHUNK_BLS': 10,
             'CHUNK_ANT': 10,
             'CHUNK_UBL': 10,
@@ -66,8 +67,7 @@ class TestRedcalCuda(unittest.TestCase):
         calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
         update_gains_cuda = gpu_module.get_function("update_gains")
         update_ubls_cuda = gpu_module.get_function("update_ubls")
-        calc_conv_gains_cuda = gpu_module.get_function("calc_conv_gains")
-        calc_conv_ubls_cuda = gpu_module.get_function("calc_conv_ubls")
+        calc_conv_ubls_cuda = gpu_module.get_function("calc_conv")
     def test_already_correct(self):
         nubls = 15
         nbls = NANT * (NANT - 1) // 2
@@ -114,10 +114,12 @@ class TestRedcalCuda(unittest.TestCase):
 class TestOmnicalSolver(unittest.TestCase):
     def test_wrap(self):
         NANTS = 18 * 3
+        #NANTS = 350
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
-        shape = (10, 1)
+        #shape = (4096,)
+        shape = (10,1)
         gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
