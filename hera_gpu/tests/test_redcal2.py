@@ -114,12 +114,12 @@ class TestRedcalCuda(unittest.TestCase):
 class TestOmnicalSolver(unittest.TestCase):
     def test_wrap(self):
         NANTS = 18 * 3
+        shape = (10,1)
         #NANTS = 350
+        #shape = (2048,)
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
-        #shape = (4096,)
-        shape = (10,1)
         gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
@@ -127,7 +127,6 @@ class TestOmnicalSolver(unittest.TestCase):
         import time
         t0 = time.time()
         meta, sol = info.omnical_gpu(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
-        print('Finished in:', time.time() - t0)
         #meta, sol = info.omnical(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
         for i in range(NANTS):
             assert sol[(i, 'Jxx')].shape == shape
