@@ -295,12 +295,12 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     a cohesive omnical algorithm.
         
     Args:
-        ggu_indices: (Nbls,3) array of (i,j,k) indices denoting data order
+        ggu_indices: (nbls,3) array of (i,j,k) indices denoting data order
                      as gains[i] * gains[j].conj() * ubl[k]
-        gains: (Nants,Ndata) array of estimated complex gains
-        ubls: (Nubls, Ndata) array of estimated complex unique baselines
-        data: (Nbls, Ndata) array of data to be calibrated
-        wgts: (Nbls, Ndata) array of weights for each data
+        gains: (ndata, nants) array of estimated complex gains
+        ubls: (ndata, nubls) array of estimated complex unique baselines
+        data: (ndata, nbls) array of data to be calibrated
+        wgts: (ndata, nbls) array of weights for each data
         conv_crit: maximum allowed relative change in solutions to be 
             considered converged
         maxiter: maximum number of omnical iterations allowed before it
@@ -323,13 +323,13 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     # Sanity check input array dimensions
     nbls = ggu_indices.shape[0]
     assert ggu_indices.shape == (nbls, 3)
-    ndata = data.shape[1]
-    assert data.shape == (nbls, ndata)
-    assert wgts.shape == (nbls, ndata)
-    nants = gains.shape[0]
-    assert gains.shape == (nants, ndata)
-    nubls = ubls.shape[0]
-    assert ubls.shape == (nubls, ndata)
+    ndata = data.shape[0]
+    assert data.shape == (ndata, nbls)
+    assert wgts.shape == (ndata, nbls)
+    nants = gains.shape[1]
+    assert gains.shape == (ndata, nants)
+    nubls = ubls.shape[1]
+    assert ubls.shape == (ndata, nubls)
     assert precision in (1,2)
     assert check_every > 1
     if verbose:
@@ -468,6 +468,7 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     conv_wgt_g  = gpuarray.empty(shape=(chunk_size,), dtype=real_dtype)
     conv_g      = gpuarray.empty(shape=(chunk_size,), dtype=real_dtype)
 
+    # Define return buffers
     chisq = np.empty((ndata,), dtype=real_dtype)
     conv  = np.empty((ndata,), dtype=real_dtype)
     iters = np.empty((ndata,), dtype=np.uint32)
@@ -491,14 +492,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
         end = min(ndata, px + chunk_size)
         beg = end - chunk_size
         offset = px - beg
-        _gains = gains[:,beg:end].T.copy()
-        _ubls   = ubls[:,beg:end].T.copy()
-        _data   = data[:,beg:end].T.copy()
-        _wgts   = wgts[:,beg:end].T.copy()
-        gains_g.set_async(_gains)
-        ubls_g.set_async(_ubls)
-        data_g.set_async(_data)
-        wgts_g.set_async(_wgts)
+        gains_g.set_async(gains[beg:end])
+        ubls_g.set_async(ubls[beg:end])
+        data_g.set_async(data[beg:end])
+        wgts_g.set_async(wgts[beg:end])
         active = np.ones((chunk_size,), dtype=np.uint32)
         if offset > 0:
             active[:offset] = 0
@@ -509,14 +506,14 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                         block=(chunk_size,1,1), grid=(1,1))
         events['upload'].record()
 
-        gen_dmdl_cuda(ggu_indices_g, gains_g, ubls_g, dmdl_g, active_g, block=block, grid=bls_grid)
+        gen_dmdl_cuda(ggu_indices_g, gains_g, ubls_g, dmdl_g, active_g,
+                      block=block, grid=bls_grid)
         events['dmdl'].record()
 
         clear_real_cuda(chisq_g, np.uint32(chunk_size), real_dtype(0),
-            block=(chunk_size,1,1), grid=(1,1))
-        calc_chisq_cuda(data_g, dmdl_g, wgts_g,
-            chisq_g, active_g,
-            block=block, grid=bls_grid)
+                        block=(chunk_size,1,1), grid=(1,1))
+        calc_chisq_cuda(data_g, dmdl_g, wgts_g, chisq_g, active_g,
+                        block=block, grid=bls_grid)
         events['calc_chisq'].record()
 
         if TIME_IT:
@@ -651,6 +648,7 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                                         events[e2].time_since(events[e1])
 
         # Download final answers into buffers returned to user
+        # use offset to trim off parts of chunk that were never active
         _chisq = np.empty((chunk_size,), dtype=real_dtype)
         chisq_g.get_async(ary=_chisq)
         chisq[px:end] = _chisq[offset:]
@@ -662,10 +660,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
         conv[px:end] = _conv[offset:]
         _gains = np.empty(ANT_SHAPE, dtype=complex_dtype)
         gains_g.get_async(ary=_gains)
-        gains[:,px:end] = _gains.T[:,offset:]
+        gains[px:end,:] = _gains[offset:,:]
         _ubls = np.empty(UBL_SHAPE, dtype=complex_dtype)
         ubls_g.get_async(ary=_ubls)
-        ubls[:,px:end] = _ubls.T[:,offset:]
+        ubls[px:end,:] = _ubls[offset:,:]
 
     t1 = time.time()
     if TIME_IT:
@@ -731,20 +729,30 @@ class OmnicalSolverGPU(OmnicalSolver):
                             for (gi, gj, uij) in terms], dtype=np.uint)
         v = sol[gi]
         shape, dtype, ndata = v.shape, v.dtype, v.size
+        ngains = len(gain_map)
+        nubls = len(ubl_map)
+        nbls = len(self.keys)
         assert dtype in (np.complex64, np.complex128)
         if precision is None:
             if dtype == np.complex64:
                 precision = 1
+                real_dtype = np.float32
             else:
                 precision = 2
-        gains = np.empty((len(gain_map), ndata), dtype=dtype)
+                real_dtype = np.float64
+        gains = np.empty((ndata, ngains), dtype=dtype)
         for k,v in gain_map.items():
-            gains[v] = sol[k].flatten()
-        ubls = np.empty((len(ubl_map), ndata), dtype=dtype)
+            gains[:,v] = sol[k].flatten()
+        ubls = np.empty((ndata, nubls), dtype=dtype)
         for k,v in ubl_map.items():
-            ubls[v] = sol[k].flatten()
-        data = np.array([self.data[k].flatten() for k in self.keys])
-        wgts = np.array([self.wgts[k].flatten() for k in self.keys])
+            ubls[:,v] = sol[k].flatten()
+        data = np.empty((ndata, nbls), dtype=dtype)
+        wgts = np.empty((ndata, nbls), dtype=real_dtype)
+        for i,k in enumerate(self.keys):
+            data[:,i] = self.data[k].flatten()
+            wgts[:,i] = self.wgts[k].flatten()
+        #data = np.array([self.data[k].flatten() for k in self.keys])
+        #wgts = np.array([self.wgts[k].flatten() for k in self.keys])
         if wgts.shape != data.shape:
             wgts = np.resize(wgts, data.shape)
         result = omnical(ggu_indices, gains, ubls, data, wgts, 
@@ -752,9 +760,9 @@ class OmnicalSolverGPU(OmnicalSolver):
             nthreads=NTHREADS, precision=precision, gain=self.gain, 
             verbose=verbose)
         for k,v in gain_map.items():
-            sol[k] = np.reshape(result['gains'][v], shape)
+            sol[k] = np.reshape(result['gains'][:,v], shape)
         for k,v in ubl_map.items():
-            sol[k] = np.reshape(result['ubls'][v], shape)
+            sol[k] = np.reshape(result['ubls'][:,v], shape)
         meta = {
             'iter': np.reshape(result['iters'], shape),
             'chisq': np.reshape(result['chisq'], shape),
