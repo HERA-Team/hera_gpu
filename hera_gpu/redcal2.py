@@ -736,10 +736,12 @@ class OmnicalSolverGPU(OmnicalSolver):
         if precision is None:
             if dtype == np.complex64:
                 precision = 1
-                real_dtype = np.float32
             else:
                 precision = 2
-                real_dtype = np.float64
+        if precision == 1:
+            real_dtype = np.float32
+        else:
+            real_dtype = np.float64
         gains = np.empty((ndata, ngains), dtype=dtype)
         for k,v in gain_map.items():
             gains[:,v] = sol[k].flatten()
