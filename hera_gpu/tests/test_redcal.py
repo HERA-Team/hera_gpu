@@ -29,7 +29,14 @@ class TestRedcalCuda(unittest.TestCase):
             'CDTYPE': 'cuFloatComplex',
         })
         gpu_module = redcal.compiler.SourceModule(gpu_code)
-        omnical_cuda = gpu_module.get_function('omnical')
+        gen_dmdl_cuda = gpu_module.get_function("gen_dmdl")
+        calc_chisq_cuda = gpu_module.get_function("calc_chisq")
+        calc_dwgts_cuda = gpu_module.get_function("calc_dwgts")
+        calc_gu_wgt_cuda = gpu_module.get_function("calc_gu_wgt")
+        calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
+        update_gains_cuda = gpu_module.get_function("update_gains")
+        update_ubls_cuda = gpu_module.get_function("update_ubls")
+        calc_conv_gains_cuda = gpu_module.get_function("calc_conv")
     def test_double_compile(self):
         gpu_code = redcal.GPU_TEMPLATE.format(**{
             'NDATA': NDATA,
@@ -45,15 +52,22 @@ class TestRedcalCuda(unittest.TestCase):
             'CDTYPE': 'cuDoubleComplex',
         })
         gpu_module = redcal.compiler.SourceModule(gpu_code)
-        omnical_cuda = gpu_module.get_function('omnical')
+        gen_dmdl_cuda = gpu_module.get_function("gen_dmdl")
+        calc_chisq_cuda = gpu_module.get_function("calc_chisq")
+        calc_dwgts_cuda = gpu_module.get_function("calc_dwgts")
+        calc_gu_wgt_cuda = gpu_module.get_function("calc_gu_wgt")
+        calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
+        update_gains_cuda = gpu_module.get_function("update_gains")
+        update_ubls_cuda = gpu_module.get_function("update_ubls")
+        calc_conv_ubls_cuda = gpu_module.get_function("calc_conv")
     def test_already_correct(self):
         nubls = 15
         nbls = NANT * (NANT - 1) // 2
         for precision in (1,2):
-            gains = np.ones((NANT,NDATA), dtype=np.complex64)
-            ubls = np.ones((nubls,NDATA), dtype=np.complex64)
-            data = np.ones((nbls, NDATA), dtype=np.complex64)
-            wgts = np.ones((nbls, NDATA), dtype=np.float32)
+            gains = np.ones((NDATA, NANT, ), dtype=np.complex64)
+            ubls  = np.ones((NDATA, nubls,), dtype=np.complex64)
+            data  = np.ones((NDATA, nbls, ), dtype=np.complex64)
+            wgts  = np.ones((NDATA, nbls, ), dtype=np.float32)
             conv_crit = 1e-4
             maxiter = 100
             check_every, check_after = 2, 1
@@ -71,10 +85,10 @@ class TestRedcalCuda(unittest.TestCase):
         nubls = 15
         nbls = NANT * (NANT - 1) // 2
         for precision in (1,2):
-            gains = 1.1 * np.ones((NANT,NDATA), dtype=np.complex64)
-            ubls = np.ones((nubls,NDATA), dtype=np.complex64)
-            data = np.ones((nbls, NDATA), dtype=np.complex64)
-            wgts = np.ones((nbls, NDATA), dtype=np.float32)
+            gains = 1.1 * np.ones((NDATA, NANT), dtype=np.complex64)
+            ubls = np.ones((NDATA, nubls,), dtype=np.complex64)
+            data = np.ones((NDATA, nbls, ), dtype=np.complex64)
+            wgts = np.ones((NDATA, nbls, ), dtype=np.float32)
             conv_crit = 1e-3**precision
             maxiter = 100
             check_every, check_after = 2, 1
@@ -92,18 +106,15 @@ class TestRedcalCuda(unittest.TestCase):
 class TestOmnicalSolver(unittest.TestCase):
     def test_wrap(self):
         NANTS = 18 * 3
+        shape = (10, 1)
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
-        shape = (10, 1)
         gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
         sol0.update(info.compute_ubls(d, sol0))
-        import time
-        t0 = time.time()
         meta, sol = info.omnical_gpu(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
-        print("Finished in:", time.time() - t0)
         #meta, sol = info.omnical(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
         for i in range(NANTS):
             assert sol[(i, 'Jxx')].shape == shape
