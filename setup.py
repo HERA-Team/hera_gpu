@@ -19,7 +19,7 @@ setuptools.setup(
 		'scipy',
 		'scikit-cuda',
 	],
-	dependency_links=['https://github.com/HERA-Team/hera_sim', 'https://github.com/HERA-Team/hera_cal'],
+	dependency_links=['https://github.com/HERA-Team/hera_sim', 'https://github.com/HERA-Team/hera_cal', 'https://github.com/HERA-Team/linsolve'],
 	classifiers=(
 		"Programming Language :: Python :: 2",
 		"Operating System :: OS Independent",

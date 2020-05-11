@@ -9,17 +9,16 @@ from numpy.random import rand
 import time
 
 np.random.seed(0)
-NANT = 16
+NANTS = 16
 NDATA = 2048
-#NDATA = 256
 
 class TestRedcalCuda(unittest.TestCase):
     def test_float_compile(self):
         gpu_code = redcal.GPU_TEMPLATE.format(**{
             'NDATA': NDATA,
-            'NBLS': NANT * (NANT - 1) // 2,
-            'NUBLS': 2 * NANT,
-            'NANTS': NANT,
+            'NBLS': NANTS * (NANTS - 1) // 2,
+            'NUBLS': 2 * NANTS,
+            'NANTS': NANTS,
             'GAIN': 0.3,
             'CMULT': 'cuCmulf',
             'CONJ': 'cuConjf',
@@ -40,9 +39,9 @@ class TestRedcalCuda(unittest.TestCase):
     def test_double_compile(self):
         gpu_code = redcal.GPU_TEMPLATE.format(**{
             'NDATA': NDATA,
-            'NBLS': NANT * (NANT - 1) // 2,
-            'NUBLS': 2 * NANT,
-            'NANTS': NANT,
+            'NBLS': NANTS * (NANTS - 1) // 2,
+            'NUBLS': 2 * NANTS,
+            'NANTS': NANTS,
             'GAIN': 0.3,
             'CMULT': 'cuCmul',
             'CONJ': 'cuConj',
@@ -62,16 +61,16 @@ class TestRedcalCuda(unittest.TestCase):
         calc_conv_ubls_cuda = gpu_module.get_function("calc_conv")
     def test_already_correct(self):
         nubls = 15
-        nbls = NANT * (NANT - 1) // 2
+        nbls = NANTS * (NANTS - 1) // 2
         for precision in (1,2):
-            gains = np.ones((NDATA, NANT, ), dtype=np.complex64)
+            gains = np.ones((NDATA, NANTS), dtype=np.complex64)
             ubls  = np.ones((NDATA, nubls,), dtype=np.complex64)
             data  = np.ones((NDATA, nbls, ), dtype=np.complex64)
             wgts  = np.ones((NDATA, nbls, ), dtype=np.float32)
             conv_crit = 1e-4
             maxiter = 100
             check_every, check_after = 2, 1
-            ggu_indices = np.array([(i,j,i-j-1) for i in range(NANT) 
+            ggu_indices = np.array([(i,j,i-j-1) for i in range(NANTS) 
                 for j in range(i)], dtype=np.uint)
             info = redcal.omnical(ggu_indices, gains, ubls, data, wgts,
                         conv_crit, maxiter, check_every, check_after,
@@ -83,16 +82,16 @@ class TestRedcalCuda(unittest.TestCase):
             np.testing.assert_allclose(info['conv'], 0, 4)
     def test_calibrate(self):
         nubls = 15
-        nbls = NANT * (NANT - 1) // 2
+        nbls = NANTS * (NANTS - 1) // 2
         for precision in (1,2):
-            gains = 1.1 * np.ones((NDATA, NANT), dtype=np.complex64)
+            gains = 1.1 * np.ones((NDATA, NANTS), dtype=np.complex64)
             ubls = np.ones((NDATA, nubls,), dtype=np.complex64)
             data = np.ones((NDATA, nbls, ), dtype=np.complex64)
             wgts = np.ones((NDATA, nbls, ), dtype=np.float32)
             conv_crit = 1e-3**precision
             maxiter = 100
             check_every, check_after = 2, 1
-            ggu_indices = np.array([(i,j,i-j-1) for i in range(NANT) 
+            ggu_indices = np.array([(i,j,i-j-1) for i in range(NANTS) 
                 for j in range(i)], dtype=np.uint)
             info = redcal.omnical(ggu_indices, gains, ubls, data, wgts,
                         conv_crit, maxiter, check_every, check_after,
@@ -105,8 +104,7 @@ class TestRedcalCuda(unittest.TestCase):
 
 class TestOmnicalSolver(unittest.TestCase):
     def test_wrap(self):
-        NANTS = 18 * 3
-        shape = (10, 1)
+        shape = (NDATA, 1)
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
@@ -127,11 +125,10 @@ class TestOmnicalSolver(unittest.TestCase):
                 np.testing.assert_almost_equal(np.abs(d_bl), np.abs(mdl), decimal=10)
                 np.testing.assert_almost_equal(np.angle(d_bl * mdl.conj()), 0, decimal=10)
     def test_same(self):
-        NANTS = 10
         antpos = linear_array(NANTS)
         reds = om.get_reds(antpos, pols=['xx'], pol_mode='1pol')
         info = redcal.RedundantCalibratorGPU(reds)
-        shape = (10, 10)
+        shape = (NDATA, 1)
         gains, true_vis, d = sim_red_data(reds, gain_scatter=.0099999, shape=shape)
         w = dict([(k, 1.) for k in d.keys()])
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
