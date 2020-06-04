@@ -5,7 +5,6 @@ from pycuda import compiler, gpuarray, driver
 from skcuda.cublas import cublasCreate, cublasDestroy
 from skcuda.cublas import cublasCcopy, cublasZcopy
 import numpy as np
-from math import ceil, floor
 import time
 from hera_cal.redcal import OmnicalSolver, RedundantCalibrator
 from linsolve import get_name
@@ -268,7 +267,7 @@ __global__ void calc_conv({CDTYPE} *new_gains, {CDTYPE} *old_gains,
 //      x axis (indexed by px) parallelizes over pixels (independent
 //          systems of equations);
 //      y axis (indexed by td) parallelizes across antennas and unique 
-            baselines, requiring max(NANTS,NUBLS) threads.
+//          baselines, requiring max(NANTS,NUBLS) threads.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -472,11 +471,11 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     ANT_SHAPE = (chunk_size, nants)
     UBL_SHAPE = (chunk_size, nubls)
     BLS_SHAPE = (chunk_size, nbls)
-    block = (chunk_size, int(floor(nthreads/chunk_size)), 1)
-    ant_grid  = (data_chunks, int(ceil(nants/block[1])))
-    ubl_grid  = (data_chunks, int(ceil(nubls/block[1])))
-    bls_grid  = (data_chunks, int(ceil( nbls/block[1])))
-    conv_grid = (data_chunks, int(ceil(max(nants,nubls)/block[1])))
+    block = (chunk_size, int(np.floor(nthreads/chunk_size)), 1)
+    ant_grid  = (data_chunks, int(np.ceil(nants/block[1])))
+    ubl_grid  = (data_chunks, int(np.ceil(nubls/block[1])))
+    bls_grid  = (data_chunks, int(np.ceil( nbls/block[1])))
+    conv_grid = (data_chunks, int(np.ceil(max(nants,nubls)/block[1])))
     if verbose:
         print('GPU block:', block)
         print('ANT grid:', ant_grid)
@@ -573,10 +572,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                     active_g, block=block, grid=bls_grid)
                 set_val_real_cuda(gwgt_g, np.uint32(nants*chunk_size),
                     real_dtype(0), block=(nthreads,1,1),
-                    grid=(int(ceil(nants * chunk_size / nthreads)),1))
+                    grid=(int(np.ceil(nants * chunk_size / nthreads)),1))
                 set_val_real_cuda(uwgt_g, np.uint32(nubls*chunk_size),
                     real_dtype(0), block=(nthreads,1,1),
-                    grid=(int(ceil(nubls * chunk_size / nthreads)),1))
+                    grid=(int(np.ceil(nubls * chunk_size / nthreads)),1))
                 calc_gu_wgt_cuda(ggu_indices_g, dmdl_g, dwgts_g, 
                     gwgt_g, uwgt_g, active_g,
                     block=block, grid=bls_grid)
@@ -584,10 +583,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
 
             clear_complex_cuda(gbuf_g, np.uint32(nants*chunk_size),
                 block=(nthreads,1,1),
-                grid=(int(ceil(nants * chunk_size / nthreads)),1))
+                grid=(int(np.ceil(nants * chunk_size / nthreads)),1))
             clear_complex_cuda(ubuf_g, np.uint32(nubls*chunk_size),
                 block=(nthreads,1,1),
-                grid=(int(ceil(nubls * chunk_size / nthreads)),1))
+                grid=(int(np.ceil(nubls * chunk_size / nthreads)),1))
             # This is 75% of the compute load
             calc_gu_buf_cuda(ggu_indices_g, 
                 data_g, dwgts_g, dmdl_g, 
