@@ -113,6 +113,8 @@ class TestOmnicalSolver(unittest.TestCase):
         sol0 = dict([(k, np.ones_like(v)) for k, v in gains.items()])
         sol0.update(info.compute_ubls(d, sol0))
         meta, sol = info.omnical_gpu(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
+        # Leaving a reference to standard (non-GPU) omnical here in
+        # case we want to compare GPU vs non-GPU for speed/accuracy.
         #meta, sol = info.omnical(d, sol0, conv_crit=1e-12, gain=.5, maxiter=500, check_after=30, check_every=6)
         for i in range(NANTS):
             assert sol[(i, 'Jxx')].shape == shape

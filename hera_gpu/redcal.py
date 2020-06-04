@@ -22,8 +22,10 @@ GPU_TEMPLATE = """
 //
 // Arrays should be shaped as (px, NBLS), (px, NANT), etc,
 // so offsets are not dependent on pixels, but only on NBLS/NANTS/etc.
-// Within kernels, x-axis parallelizes over separate omnical optimizations;
-// y-axis parallelizes computations within an omnical calculation.
+// Within kernels, the x-axis (indexed by px) parallelizes over 
+// separate omnical optimizations (i.e. independent systems of equations);
+// the y-axis parallelizes computations within an omnical calculation,
+// mapping threads to, e.g., antennas or baselines, to accelerate.
 //
 // === Template Parameters ===
 // "NBLS": number of baselines in data/dmdl/wgts, etc.
@@ -46,7 +48,11 @@ __device__ inline {DTYPE} mag2({CDTYPE} a) {{
 
 __global__ void gen_dmdl(uint *ggu_indices, {CDTYPE} *gains,
                          {CDTYPE} *ubls, {CDTYPE} *dmdl, uint *active)
-// Calculate gi * gj.conj * ubl for each baseline in data
+// Calculate gi * gj.conj * ubl for each baseline in data.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -69,7 +75,11 @@ __global__ void gen_dmdl(uint *ggu_indices, {CDTYPE} *gains,
 
 __global__ void calc_chisq({CDTYPE} *data, {CDTYPE} *dmdl, {DTYPE} *wgts,
                            {DTYPE} *chisq, uint *active)
-// Calculate weighted X^2 difference between data and dmdl
+// Calculate weighted X^2 difference between data and dmdl.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -85,7 +95,11 @@ __global__ void calc_chisq({CDTYPE} *data, {CDTYPE} *dmdl, {DTYPE} *wgts,
 
 __global__ void calc_dwgts({CDTYPE} *dmdl, {DTYPE} *wgts, {DTYPE} *dwgts,
                            uint *active)
-// Calculate per-baseline weights as |dmdl|^2 * wgt
+// Calculate per-baseline weights as |dmdl|^2 * wgt.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -98,7 +112,9 @@ __global__ void calc_dwgts({CDTYPE} *dmdl, {DTYPE} *wgts, {DTYPE} *dwgts,
 
 
 __global__ void clear_complex({CDTYPE} *buf, uint len)
-// Clear a complex buffer of length 'len'
+// Clear a complex buffer of length 'len'.
+// Uses 1D blocks of threads:
+//      x axis (indexed by px) parallelizes over buf index up to len.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     if (px < len) {{
@@ -107,8 +123,10 @@ __global__ void clear_complex({CDTYPE} *buf, uint len)
 }}
 
 
-__global__ void clear_real({DTYPE} *buf, uint len, {DTYPE} val)
-// Fill a real-valued buffer of length 'len' with value 'val'
+__global__ void set_val_real({DTYPE} *buf, uint len, {DTYPE} val)
+// Fill a real-valued buffer of length 'len' with value 'val'.
+// Uses 1D blocks of threads:
+//      x axis (indexed by px) parallelizes over buf index up to len.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     if (px < len) {{
@@ -117,8 +135,10 @@ __global__ void clear_real({DTYPE} *buf, uint len, {DTYPE} val)
 }}
 
 
-__global__ void clear_uint(uint *buf, uint len, uint val)
-// Fill a uint-valued buffer of length 'len' with value 'val'
+__global__ void set_val_uint(uint *buf, uint len, uint val)
+// Fill a uint-valued buffer of length 'len' with value 'val'.
+// Uses 1D blocks of threads:
+//      x axis (indexed by px) parallelizes over buf index up to len.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     if (px < len) {{
@@ -132,6 +152,10 @@ __global__ void calc_gu_wgt(uint *ggu_indices, {CDTYPE} *dmdl,
                             {DTYPE} *uwgt, uint *active)
 // Calculate the gain/ubl weights used in denominator of estimates of the
 // next gain/ubl values. Not updated every loop. Compute intense.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -156,6 +180,10 @@ __global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *data,
                             {CDTYPE} *gbuf, {CDTYPE} *ubuf, uint *active)
 // Calculate the gain/ubl numerator used to estimate next gain/ubl values.
 // Updated every loop. Most compute-intensive step by factor of 3.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -173,6 +201,8 @@ __global__ void calc_gu_buf(uint *ggu_indices, {CDTYPE} *data,
         d.x = d.x * w;
         d.y = d.y * w;
         i = ant_offset + ggu_indices[idx];
+        // ARP: tried pre-accumulating in shared memory, instead of
+        // atomicAdds to global memory, but was significantly slower.
         atomicAdd(&gbuf[i].x,  d.x);
         atomicAdd(&gbuf[i].y,  d.y);
         i = ant_offset + ggu_indices[idx+1];
@@ -189,6 +219,10 @@ __global__ void update_gains({CDTYPE} *gbuf, {DTYPE} *gwgt,
                              {CDTYPE} *gains, float gstep, uint *active)
 // Given accumated values in gbuf and gwgt and step size gstep, compute
 // new gains for next iteration.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across antennas.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -207,6 +241,10 @@ __global__ void update_ubls({CDTYPE} *ubuf, {DTYPE} *uwgt,
                             {CDTYPE} *ubls, float gstep, uint *active)
 // Given accumated values in ubuf and uwgt and step size gstep, compute
 // new ubls for next iteration.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across unique baselines.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -226,6 +264,11 @@ __global__ void calc_conv({CDTYPE} *new_gains, {CDTYPE} *old_gains,
                           {DTYPE} *conv_sum, {DTYPE} *conv_wgt,
                           uint *active)
 // Compare old and new values of gains/ubls to determine convergence.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across antennas and unique 
+            baselines, requiring max(NANTS,NUBLS) threads.
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -256,6 +299,10 @@ __global__ void update_active({CDTYPE} *new_gains, {CDTYPE} *old_gains,
 // Given values of convergence and chisq, copy new gains/ubls into
 // the working (old) values, update chisq, record the next iteration,
 // and flag off pixels in active that have converged/diverged.
+// Uses 2D blocks of threads:
+//      x axis (indexed by px) parallelizes over pixels (independent
+//          systems of equations);
+//      y axis (indexed by td) parallelizes across antennas and unique 
 {{
     const uint px = blockIdx.x * blockDim.x + threadIdx.x;
     const uint td = blockIdx.y * blockDim.y + threadIdx.y;
@@ -288,7 +335,7 @@ __global__ void update_active({CDTYPE} *new_gains, {CDTYPE} *old_gains,
 
 
 def omnical(ggu_indices, gains, ubls, data, wgts, 
-            conv_crit, maxiter, check_every, check_after,
+            conv_crit=1e-10, maxiter=50, check_every=4, check_after=1,
             gain=0.3, nthreads=NTHREADS,
             precision=1, verbose=False):
     '''CPU-side function for organizing GPU-acceleration primitives into
@@ -358,15 +405,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     gains = gains.astype(complex_dtype)
     ubls = ubls.astype(complex_dtype)
     
-    # px=64, nants=350, precision=1, nthreads//16 -> 15.5 s
-    # px=128, nants=350, precision=1, nthreads//16 -> 15.3 s
-    # px=256, nants=350, precision=1, nthreads//16 -> 16.3 s
-    # px=512, nants=350, precision=1, nthreads//16 -> 18.1 s
-    # px=1024, nants=350, precision=1, nthreads//16 -> 21.5 s
-    # px=2048, nants=350, precision=1, nthreads//16 -> 28.0 s
-    # (killed after that for memory)
+    # Profiling info used to determine optimal chunk size:
     # Model: 15.3 s + ndata/140 => px=8192 in 75 s on Quadro T2000
-    
     # px=2000, nants=126, precision=2
     #chunk_size = min(nthreads // 2, ndata) # 8.5 s
     #chunk_size = min(nthreads // 4, ndata) # 6.7 s
@@ -395,6 +435,7 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     #chunk_size = min(nthreads // 16, ndata) # 7.3 s
     #chunk_size = min(nthreads // 32, ndata) # 7.4 s
     #chunk_size = min(nthreads // 64, ndata) # 7.5 s
+    # Upshot: nthreads // 16 seems to cover most cases, no need to tune.
 
     # Build the CUDA code
     gpu_code = GPU_TEMPLATE.format(**{
@@ -416,8 +457,8 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     calc_gu_wgt_cuda = gpu_module.get_function("calc_gu_wgt")
     calc_gu_buf_cuda = gpu_module.get_function("calc_gu_buf")
     clear_complex_cuda = gpu_module.get_function("clear_complex")
-    clear_real_cuda = gpu_module.get_function("clear_real")
-    clear_uint_cuda = gpu_module.get_function("clear_uint")
+    set_val_real_cuda = gpu_module.get_function("set_val_real")
+    set_val_uint_cuda = gpu_module.get_function("set_val_uint")
     update_gains_cuda = gpu_module.get_function("update_gains")
     update_ubls_cuda = gpu_module.get_function("update_ubls")
     calc_conv_cuda = gpu_module.get_function("calc_conv")
@@ -426,7 +467,6 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
     h = cublasCreate() # handle for managing cublas, used for buffer copies
 
     # define GPU buffers, suffix _g indicates GPU buffer
-    #data_chunks = int(ceil(ndata / chunk_size))
     chunk_size = min(nthreads // 16, ndata)
     data_chunks = 1
     ANT_SHAPE = (chunk_size, nants)
@@ -500,9 +540,9 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
         if offset > 0:
             active[:offset] = 0
         active_g.set_async(active)
-        clear_real_cuda(conv_sum_g, np.uint32(chunk_size), real_dtype(0),
+        set_val_real_cuda(conv_sum_g, np.uint32(chunk_size), real_dtype(0),
                         block=(chunk_size,1,1), grid=(1,1))
-        clear_real_cuda(conv_wgt_g, np.uint32(chunk_size), real_dtype(0),
+        set_val_real_cuda(conv_wgt_g, np.uint32(chunk_size), real_dtype(0),
                         block=(chunk_size,1,1), grid=(1,1))
         events['upload'].record()
 
@@ -510,7 +550,7 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                       block=block, grid=bls_grid)
         events['dmdl'].record()
 
-        clear_real_cuda(chisq_g, np.uint32(chunk_size), real_dtype(0),
+        set_val_real_cuda(chisq_g, np.uint32(chunk_size), real_dtype(0),
                         block=(chunk_size,1,1), grid=(1,1))
         calc_chisq_cuda(data_g, dmdl_g, wgts_g, chisq_g, active_g,
                         block=block, grid=bls_grid)
@@ -531,10 +571,10 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                 # every few iterations to save compute.
                 calc_dwgts_cuda(dmdl_g, wgts_g, dwgts_g,
                     active_g, block=block, grid=bls_grid)
-                clear_real_cuda(gwgt_g, np.uint32(nants*chunk_size),
+                set_val_real_cuda(gwgt_g, np.uint32(nants*chunk_size),
                     real_dtype(0), block=(nthreads,1,1),
                     grid=(int(ceil(nants * chunk_size / nthreads)),1))
-                clear_real_cuda(uwgt_g, np.uint32(nubls*chunk_size),
+                set_val_real_cuda(uwgt_g, np.uint32(nubls*chunk_size),
                     real_dtype(0), block=(nthreads,1,1),
                     grid=(int(ceil(nubls * chunk_size / nthreads)),1))
                 calc_gu_wgt_cuda(ggu_indices_g, dmdl_g, dwgts_g, 
@@ -607,16 +647,16 @@ def omnical(ggu_indices, gains, ubls, data, wgts,
                     block=block, grid=bls_grid)
                 events['dmdl2'].record()
 
-                clear_real_cuda(new_chisq_g, np.uint32(chunk_size),
+                set_val_real_cuda(new_chisq_g, np.uint32(chunk_size),
                     real_dtype(0), block=(chunk_size,1,1), grid=(1,1))
                 calc_chisq_cuda(data_g, dmdl_g, wgts_g,
                     new_chisq_g, active_g,
                     block=block, grid=bls_grid)
                 events['chisq2'].record()
 
-                clear_real_cuda(conv_sum_g, np.uint32(chunk_size),
+                set_val_real_cuda(conv_sum_g, np.uint32(chunk_size),
                     real_dtype(0), block=(chunk_size,1,1), grid=(1,1))
-                clear_real_cuda(conv_wgt_g, np.uint32(chunk_size),
+                set_val_real_cuda(conv_wgt_g, np.uint32(chunk_size),
                     real_dtype(0), block=(chunk_size,1,1), grid=(1,1))
                 calc_conv_cuda(new_gains_g, gains_g,
                     new_ubls_g, ubls_g,
@@ -694,13 +734,16 @@ class OmnicalSolverGPU(OmnicalSolver):
             conv_crit: A convergence criterion (default 1e-10) below which 
                 to stop iterating.  Converegence is measured L2-norm of 
                 the change in the solution of all the variables divided by 
-                the L2-norm of the solution itself.
+                the L2-norm of the solution itself. Default is 1e-10.
             maxiter: An integer maximum number of iterations to perform 
                 before quitting. Default 50.
             check_every: Compute convergence and updates weights every Nth 
                 iteration (saves computation). Default 4.
             check_after: Start computing convergence and updating weights 
                 after the first N iterations.  Default 1.
+            precision: 1=float32, 2=double (float64), None=determined from 
+                data. Default None.
+            verbose: If True, print things. Default False.
 
         Returns: meta, sol
             meta: a dictionary with metadata about the solution, including
@@ -791,9 +834,9 @@ class RedundantCalibratorGPU(RedundantCalibrator):
                 safe. Increasing values trade speed for stability.  
                 Default is 0.3.
             conv_crit: maximum allowed relative change in solutions to be 
-                considered converged
+                considered converged. Default is 1e-10.
             maxiter: maximum number of omnical iterations allowed before it
-                gives up
+                gives up. Default is 50.
             check_every: Compute convergence every Nth iteration (saves 
                 computation).  Default 4.
             check_after: Start computing convergence only after N 
