@@ -3,7 +3,6 @@ from pycuda import compiler, gpuarray, driver
 from skcuda.cublas import cublasCreate, cublasSetStream, cublasSgemm, cublasCgemm, cublasDestroy, cublasDgemm, cublasZgemm
 from astropy.constants import c as speed_of_light
 import numpy as np
-from math import ceil
 import time
 
 ONE_OVER_C = 1.0 / speed_of_light.value
@@ -174,11 +173,11 @@ def vis_gpu(antpos, freq, eq2tops, crd_eq, I_sky, bm_cube,
     crd_eq = crd_eq.astype(real_dtype)
     Isqrt = np.sqrt(I_sky).astype(real_dtype)
     bm_cube = bm_cube.astype(real_dtype) # XXX complex?
-    chunk = max(min(npix,MIN_CHUNK),2**int(ceil(np.log2(float(nant*npix) / max_memory / 2))))
+    chunk = max(min(npix,MIN_CHUNK),2**int(np.ceil(np.log2(float(nant*npix) / max_memory / 2))))
     npixc = npix // chunk
     # blocks of threads are mapped to (pixels,ants,freqs)
     block = (max(1,nthreads//nant), min(nthreads,nant), 1)
-    grid = (int(ceil(npixc/float(block[0]))),int(ceil(nant/float(block[1]))))
+    grid = (int(np.ceil(npixc/float(block[0]))),int(np.ceil(nant/float(block[1]))))
     
     # Choose to use single or double precision CUDA code
     gpu_code = GPU_TEMPLATE % {
