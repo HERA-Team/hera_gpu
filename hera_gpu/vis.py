@@ -141,8 +141,168 @@ NTHREADS = 1024 # make 512 for smaller GPUs
 MAX_MEMORY = 2**29 # floats (4B each)
 MIN_CHUNK = 8
 
+class VisGPUContext():
 
-def vis_gpu(vis_output, antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm,
+    def setup(self, antpos, eq2tops, crd_eq, bm_cube,
+            nthreads=NTHREADS, max_memory=MAX_MEMORY,
+            precision=1, verbose=False):
+
+        assert(precision in (1,2))
+        if precision == 1:
+            real_dtype, complex_dtype = np.float32, np.complex64
+            DTYPE, CDTYPE = 'float', 'cuFloatComplex'
+            cublas_real_mm = cublasSgemm
+            cublas_cmpx_mm = cublasCgemm
+        else:
+            real_dtype, complex_dtype = np.float64, np.complex128
+            DTYPE, CDTYPE = 'double', 'cuDoubleComplex'
+            cublas_real_mm = cublasDgemm
+            cublas_cmpx_mm = cublasZgemm
+        # ensure shapes
+        nant = antpos.shape[0]
+        assert(antpos.shape == (nant, 3))
+        npix = crd_eq.shape[1]
+        assert(crd_eq.shape == (3, npix))
+        beam_px = bm_cube.shape[1]
+        assert(bm_cube.shape == (nant, beam_px, beam_px))
+        ntimes = eq2tops.shape[0]
+        assert(eq2tops.shape == (ntimes, 3, 3))
+        # ensure data types
+        antpos = antpos.astype(real_dtype)
+        eq2tops = eq2tops.astype(real_dtype)
+        crd_eq = crd_eq.astype(real_dtype)
+        bm_cube = bm_cube.astype(real_dtype) # XXX complex?
+        chunk = max(min(npix,MIN_CHUNK),2**int(np.ceil(np.log2(float(nant*npix) / max_memory / 2))))
+        npixc = npix // chunk
+        # blocks of threads are mapped to (pixels,ants,freqs)
+        block = (max(1,nthreads//nant), min(nthreads,nant), 1)
+        grid = (int(np.ceil(npixc/float(block[0]))),int(np.ceil(nant/float(block[1]))))
+    
+        # Choose to use single or double precision CUDA code
+        gpu_code = GPU_TEMPLATE % {
+            'NANT': nant,
+            'NPIX': npixc,
+            'BEAM_PX': beam_px,
+            'BLOCK_PX': block[0],
+            'DTYPE': DTYPE,
+            'CDTYPE': CDTYPE,
+        }
+
+        gpu_module = compiler.SourceModule(gpu_code)
+        bm_interp = gpu_module.get_function("InterpolateBeam")
+        meas_eq = gpu_module.get_function("MeasEq")
+        bm_texref = gpu_module.get_texref("bm_tex")
+        h = cublasCreate() # handle for managing cublas
+        # define GPU buffers and transfer initial values
+        antpos_gpu = gpuarray.to_gpu(antpos) # never changes, set to -2*pi*antpos/c
+        Isqrt_gpu = gpuarray.empty(shape=(npixc,), dtype=real_dtype)
+        A_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU by bm_interp
+        crd_eq_gpu = gpuarray.empty(shape=(3,npixc), dtype=real_dtype)
+        eq2top_gpu = gpuarray.empty(shape=(3,3), dtype=real_dtype) # sent from CPU each time
+        crdtop_gpu = gpuarray.empty(shape=(3,npixc), dtype=real_dtype) # will be set on GPU
+        tau_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU
+        v_gpu = gpuarray.empty(shape=(nant,npixc), dtype=complex_dtype) # will be set on GPU
+        vis_gpus = [gpuarray.empty(shape=(nant,nant), dtype=complex_dtype) for i in range(chunk)]
+        # output CPU buffers for downloading answers
+        vis_cpus = [np.empty(shape=(nant,nant), dtype=complex_dtype) for i in range(chunk)]
+        streams = [driver.Stream() for i in range(chunk)]
+        event_order = ('start','upload','eq2top','tau','interpolate','meas_eq','vis','end')
+        vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
+        
+        self.eq2tops = eq2tops
+        self.eq2top_gpu = eq2top_gpu
+        self.ntimes = ntimes
+        self.streams = streams
+        self.chunk = chunk
+        self.vis_gpus = vis_gpus
+        self.vis_cpus = vis_cpus
+        self.h = h
+        self.npixc = npixc
+        self.crd_eq_gpu = crd_eq_gpu
+        self.crd_eq = crd_eq
+        self.crdtop_gpu = crdtop_gpu
+        self.antpos_gpu = antpos_gpu
+        self.tau_gpu = tau_gpu
+        self.A_gpu = A_gpu
+        self.grid = grid
+        self.block = block
+        self.Isqrt_gpu = Isqrt_gpu
+        self.v_gpu = v_gpu
+        self.nant = nant
+        self.bm_texref = bm_texref 
+        self.npix = npix 
+        self.real_dtype = real_dtype
+        self.event_order = event_order
+        self.cublas_real_mm = cublas_real_mm 
+        self.cublas_cmpx_mm = cublas_cmpx_mm
+        self.bm_interp = bm_interp
+        self.meas_eq = meas_eq
+        self.vis = vis
+
+    def run(self, freq, I_sky, bm_cube):
+        # apply scalars so 1j*tau*freq is the correct exponent
+        freq = 2 * freq * np.pi
+        assert(I_sky.shape == (self.npix,))
+        Isqrt = np.sqrt(I_sky).astype(self.real_dtype)
+        beam_px = bm_cube.shape[1]
+        assert(bm_cube.shape == (self.nant, beam_px, beam_px))
+        bm_cube = bm_cube.astype(self.real_dtype) # XXX complex?
+        self.bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NANT)
+ 
+        for t in range(self.ntimes):
+            self.eq2top_gpu.set(self.eq2tops[t]) # defines sky orientation for this time step
+            events = [{e:driver.Event() for e in self.event_order} for i in range(self.chunk)]
+            for c in range(self.chunk+2):
+                cc = c - 1
+                ccc = c - 2
+                if 0 <= ccc < self.chunk:
+                    stream = self.streams[ccc]
+                    self.vis_gpus[ccc].get_async(ary=self.vis_cpus[ccc], stream=stream)
+                    events[ccc]['end'].record(stream)
+                if 0 <= cc < self.chunk:
+                    stream = self.streams[cc]
+                    cublasSetStream(self.h, stream.handle)
+                    ## compute crdtop = dot(eq2top,crd_eq)
+                    # cublas arrays are in Fortran order, so P=M*N is actually 
+                    # peformed as P.T = N.T * M.T
+                    self.cublas_real_mm(self.h, 'n', 'n', self.npixc, 3, 3, 1., self.crd_eq_gpu.gpudata, 
+                    self.npixc, self.eq2top_gpu.gpudata, 3, 0., self.crdtop_gpu.gpudata, self.npixc)
+                    events[cc]['eq2top'].record(stream)
+                    ## compute tau = dot(antpos,crdtop) / speed_of_light
+                    self.cublas_real_mm(self.h, 'n', 'n', self.npixc, self.nant, 3, ONE_OVER_C, self.crdtop_gpu.gpudata, 
+                    self.npixc, self.antpos_gpu.gpudata, 3, 0., self.tau_gpu.gpudata, self.npixc)
+                    events[cc]['tau'].record(stream)
+                    ## interpolate bm_tex at specified topocentric coords, store interpolation in A
+                    ## threads are parallelized across pixel axis
+                    self.bm_interp(self.crdtop_gpu, self.A_gpu, grid=self.grid, block=self.block, stream=stream)
+                    events[cc]['interpolate'].record(stream)
+
+                    # compute v = A * I * exp(1j*tau*freq)
+                    self.meas_eq(self.A_gpu, self.Isqrt_gpu, self.tau_gpu, self.real_dtype(freq), self.v_gpu, 
+                    grid=self.grid, block=self.block, stream=stream)
+                    events[cc]['meas_eq'].record(stream)
+                    # compute vis = dot(v, v.T)
+                    # transpose below incurs about 20% overhead
+                    self.cublas_cmpx_mm(self.h, 'c', 'n', self.nant, self.nant, self.npixc, 1., self.v_gpu.gpudata, 
+                    self.npixc, self.v_gpu.gpudata, self.npixc, 0., self.vis_gpus[cc].gpudata, self.nant)
+                    events[cc]['vis'].record(stream)
+                if c < self.chunk:
+                    stream = self.streams[c]
+                    events[c]['start'].record(stream)
+                    self.crd_eq_gpu.set_async(self.crd_eq[:,c*self.npixc:(c+1)*self.npixc], stream=stream)
+                    self.Isqrt_gpu.set_async(Isqrt[c*self.npixc:(c+1)*self.npixc], stream=stream)
+                    events[c]['upload'].record(stream)
+            events[self.chunk-1]['end'].synchronize()
+            self.vis[t] = sum(self.vis_cpus)
+            
+            return np.conj(self.vis)
+
+    # teardown GPU configuration
+    def __del__():
+      cublasDestroy(h)
+      
+
+def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
             nthreads=NTHREADS, max_memory=MAX_MEMORY,
             precision=1, verbose=False):
             
@@ -211,7 +371,8 @@ def vis_gpu(vis_output, antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm,
     streams = [driver.Stream() for i in range(chunk)]
     event_order = ('start','upload','eq2top','tau','interpolate','meas_eq','vis','end')
     vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
-      
+    visfull = np.zeros(vis_spec[0], dtype=vis_spec[1])
+  
     for index in range(len(frequencies)):      # Attempting to go beyond will trigger an exception
         freq = frequencies[index]
         I_sky = I_skies[index]
@@ -271,6 +432,8 @@ def vis_gpu(vis_output, antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm,
 
             indices = np.triu_indices(vis.shape[1])
             vis_upper_tri = vis[:, indices[0], indices[1]]
-            vis_output[:, 0, index, 0] = vis_upper_tri.flatten()
+            visfull[:, 0, index, 0] = vis_upper_tri.flatten()
 
+    cublasDestroy(h)
 
+    return visfull
