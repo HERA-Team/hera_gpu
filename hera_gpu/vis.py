@@ -16,77 +16,62 @@ GPU_TEMPLATE = """
 // "BLOCK_PX": # of sky pixels handled by one GPU block, used to size shared memory
 // "NANT"   : # of antennas to pair into visibilities
 // "NPIX"   : # of sky pixels to sum over.
-// "BEAM_PX": dimension of sampled square beam matrix to be interpolated.  
-//            Suggest using odd number.
+// "BEAM_PX": number of beam coefficients for PolyBeam
 
 #include <cuComplex.h>
 #include <pycuda-helpers.hpp>
 #include <stdio.h>
 
-// Linearly interpolate between [v0,v1] for t=[0,1]
-// v = v0 * (1-t) + v1 * t = t*v1 + (-t*v0 + v0)
-// Runs on GPU only
-__device__
-inline %(DTYPE)s lerp(%(DTYPE)s v0, %(DTYPE)s v1, %(DTYPE)s t) {
-    return fma(t, v1, fma(-t, v0, v0));
+// Chebval code from https://github.com/numpy/numpy/blob/v1.19.0/numpy/polynomial/chebyshev.py#L1088-L1172
+__device__ %(DTYPE)s chebval(%(DTYPE)s x, %(DTYPE)s *c) {
+    %(DTYPE)s x2, tmp, c0, c1;
+    int i;
+
+    x2 = 2*x;
+    c0 = c[%(BEAM_PX)s-2];      // BEAM_PX is number of beam coeffs
+    c1 = c[%(BEAM_PX)s-1];
+    for (i=3; i<%(BEAM_PX)s+1; ++i) {
+        tmp = c0;
+        c0 = c[%(BEAM_PX)s-i] - c1;
+        c1 = tmp + c1*x2;
+    }
+    return c0 + c1*x;
 }
 
-// 3D texture storing beam response on (x=sin th_x, y=sin th_y, nant) grid
-// for fast lookup by multiple threads.  Suggest setting first 2 dims of
-// bm_tex to an odd number to get pixel centered on zenith.  The pixels
-// on the border are centered at [-1,1] respectively.  Note that this
-// matrix is transposed relative to the host-side matrix used to set it.
-texture<fp_tex_%(DTYPE)s, cudaTextureType3D, cudaReadModeElementType> bm_tex;
+// Interpolate the beam using Chebyshev polynomials.
+// top is (3, nsource), the 3 are x, y, z, so it has source information
+// beam is (nant, n_coeff) or (nbeam, n_coeff) (should be the same, which is checked).
+// The thread is generating the beam value for a particular ant and source (ant, pix in the
+// code below), also for a particular frequency, which is inherent in the fscale values.
+// fscale is (nant,)
+__global__ void InterpolateBeam(%(DTYPE)s *top, %(DTYPE)s *beam_coeff, %(DTYPE)s *fscale, %(DTYPE)s *A)
+{
+    const uint nant = %(NANT)s;
+    const uint npix = %(NPIX)s;		// actually nsource
+    const uint pix = blockIdx.x * blockDim.x + threadIdx.x;  // which source this thread
+    const uint ant = blockIdx.y * blockDim.y + threadIdx.y;  // which ant this thread
+    const %(DTYPE)s PI =  3.141592653589793238;
+    %(DTYPE)s l, m, lsqr, n, za, x;
+    
+    if (pix >= npix || ant >= nant) return;
+
+    // Calculate za for this source, copying the code from lm_to_az_za in conversions
+    l = top[pix]; m = top[npix+pix];     // tx, ty in the Python
+    lsqr = l*l+m*m;
+    if ( lsqr < 1 ) n = sqrt(1.0-lsqr); else n = 0;
+    za = PI/2.0-asin(n);
+
+    // Modify za using the fscale from the beam for this ant
+    x = 2.0*sin(za/fscale[ant])-1;	// In PolyBeam interp
+    
+    A[ant*npix+pix] = chebval(x, beam_coeff+ant*%(BEAM_PX)s)
+			/chebval(-1, beam_coeff+ant*%(BEAM_PX)s);
+    if ( A[ant*npix+pix] < 0 ) A[ant*npix+pix] = 0;
+}
 
 // Shared memory for storing per-antenna results to be reused among all ants
 // for "BLOCK_PX" pixels, avoiding a rush on global memory.
 __shared__ %(DTYPE)s sh_buf[%(BLOCK_PX)s*5];
-
-// Interpolate bm_tex[x,y] at top=(x,y,z) coords and store answer in "A"
-__global__ void InterpolateBeam(%(DTYPE)s *top, %(DTYPE)s *A)
-{
-    const uint nant = %(NANT)s;
-    const uint npix = %(NPIX)s;
-    const uint tx = threadIdx.x; // switched to make first dim px
-    const uint ty = threadIdx.y; // switched to make second dim ant
-    const uint pix = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint ant = blockIdx.y * blockDim.y + threadIdx.y;
-    const uint beam_px = %(BEAM_PX)s;
-    %(DTYPE)s bm_x, bm_y, px, py, pz, fx, fy, top_z;
-
-    if (pix >= npix || ant >= nant) return;
-    if (ty == 0) // buffer top_z for all antennas
-        sh_buf[tx+%(BLOCK_PX)s * 4] = top[2*npix+pix];
-    __syncthreads(); // make sure top_z exists for all threads
-    top_z = sh_buf[tx+%(BLOCK_PX)s * 4];
-    if (ty == 0 && top_z > 0) { // buffer x interpolation for all threads
-        bm_x = (beam_px-1) * (0.5 * top[pix] + 0.5);
-        px = floorf(bm_x);
-        sh_buf[tx+%(BLOCK_PX)s * 0] = bm_x - px; // fx, fractional position
-        sh_buf[tx+%(BLOCK_PX)s * 2] = px + 0.5f; // px, pixel index
-    }
-    if (ty == 1 && top_z > 0) { // buffer y interpolation for all threads
-        bm_y = (beam_px-1) * (0.5 * top[npix+pix] + 0.5);
-        py = floorf(bm_y); 
-        sh_buf[tx+%(BLOCK_PX)s * 1] = bm_y - py; // fy, fractional position
-        sh_buf[tx+%(BLOCK_PX)s * 3] = py + 0.5f; // py, pixel index
-    }
-    __syncthreads(); // make sure interpolation exists for all threads
-    if (top_z > 0) {
-        fx = sh_buf[tx+%(BLOCK_PX)s * 0];
-        fy = sh_buf[tx+%(BLOCK_PX)s * 1];
-        px = sh_buf[tx+%(BLOCK_PX)s * 2];
-        py = sh_buf[tx+%(BLOCK_PX)s * 3];
-        pz = ant + 0.5f;
-        A[ant*npix+pix] = lerp(
-            lerp(fp_tex3D(bm_tex,px,py,pz), fp_tex3D(bm_tex,px+1.0f,py,pz), fx),
-            lerp(fp_tex3D(bm_tex,px,py+1.0f,pz),
-                fp_tex3D(bm_tex,px+1.0f,py+1.0f,pz),fx), fy);
-    } else {
-        A[ant*npix+pix] = 0;
-    }
-    __syncthreads(); // make sure everyone used mem before kicking out
-}
 
 // Compute A*I*exp(ij*tau*freq) for all antennas, storing output in v
 __global__ void MeasEq(%(DTYPE)s *A, %(DTYPE)s *I, %(DTYPE)s *tau, %(DTYPE)s freq, %(CDTYPE)s *v)
@@ -110,38 +95,11 @@ __global__ void MeasEq(%(DTYPE)s *A, %(DTYPE)s *I, %(DTYPE)s *tau, %(DTYPE)s fre
 }
 """
 
-def numpy3d_to_array(np_array):
-    '''Copy a 3D (d,h,w) numpy array into a 3D pycuda array that can be used 
-    to set a texture.  (For some reason, gpuarrays can't be used to do that 
-    directly).  A transpose happens implicitly; the CUDA array has dim (w,h,d).'''
-    import pycuda.autoinit
-    d, h, w = np_array.shape
-    descr = driver.ArrayDescriptor3D()
-    descr.width = w
-    descr.height = h
-    descr.depth = d
-    if np_array.dtype == np.float64:
-        descr.format = driver.array_format.SIGNED_INT32
-        descr.num_channels = 2
-    else:
-        descr.format = driver.dtype_to_array_format(np_array.dtype)
-        descr.num_channels = 1
-    descr.flags = 0
-    device_array = driver.Array(descr)
-    copy = driver.Memcpy3D()
-    copy.set_src_host(np_array)
-    copy.set_dst_array(device_array)
-    copy.width_in_bytes = copy.src_pitch = np_array.strides[1]
-    copy.src_height = copy.height = h
-    copy.depth = d
-    copy()
-    return device_array
-
 NTHREADS = 1024 # make 512 for smaller GPUs
 MAX_MEMORY = 2**29 # floats (4B each)
 MIN_CHUNK = 8
 
-def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
+def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_list, vis_spec,
             nthreads=NTHREADS, max_memory=MAX_MEMORY,
             precision=1, verbose=False):
             
@@ -157,12 +115,17 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
         cublas_real_mm = cublasDgemm
         cublas_cmpx_mm = cublasZgemm
 
+
     # ensure shapes
 
-    bm_cube = beam_lm[:, 0]	
-    beam_px = bm_cube.shape[1]
     nant = antpos.shape[0]
-    assert(beam_lm.shape == (nant, frequencies.shape[0], beam_px, beam_px))
+    assert(len(beam_list) == nant)
+    beam_coeffs = np.empty((len(beam_list), len(beam_list[0].beam_coeffs)))
+    for i in range(len(beam_list)):
+        if len(beam_list[i].beam_coeffs) != len(beam_list[0].beam_coeffs):
+           raise RuntimeError("Number of beam coeffs differ by beam, for GPU")
+        beam_coeffs[i] = np.array(beam_list[i].beam_coeffs)
+
     assert(antpos.shape == (nant, 3))
     npix = crd_eq.shape[1]
     assert(I_skies.shape == (frequencies.shape[0], npix))
@@ -173,18 +136,18 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
     antpos = antpos.astype(real_dtype)
     eq2tops = eq2tops.astype(real_dtype)
     crd_eq = crd_eq.astype(real_dtype)
-    bm_cube = bm_cube.astype(real_dtype) # XXX complex?
+    beam_coeffs = beam_coeffs.astype(real_dtype) # XXX complex?
     chunk = max(min(npix,MIN_CHUNK),2**int(np.ceil(np.log2(float(nant*npix) / max_memory / 2))))
     npixc = npix // chunk
     # blocks of threads are mapped to (pixels,ants,freqs)
     block = (max(1,nthreads//nant), min(nthreads,nant), 1)
     grid = (int(np.ceil(npixc/float(block[0]))),int(np.ceil(nant/float(block[1]))))
-    
+
     # Choose to use single or double precision CUDA code
     gpu_code = GPU_TEMPLATE % {
         'NANT': nant,
         'NPIX': npixc,
-        'BEAM_PX': beam_px,
+        'BEAM_PX': beam_coeffs.shape[1],
         'BLOCK_PX': block[0],
         'DTYPE': DTYPE,
         'CDTYPE': CDTYPE,
@@ -193,12 +156,14 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
     gpu_module = compiler.SourceModule(gpu_code)
     bm_interp = gpu_module.get_function("InterpolateBeam")
     meas_eq = gpu_module.get_function("MeasEq")
-    bm_texref = gpu_module.get_texref("bm_tex")
     h = cublasCreate() # handle for managing cublas
     # define GPU buffers and transfer initial values
     antpos_gpu = gpuarray.to_gpu(antpos) # never changes, set to -2*pi*antpos/c
     Isqrt_gpu = gpuarray.empty(shape=(npixc,), dtype=real_dtype)
     A_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU by bm_interp
+    beam_gpu = gpuarray.empty(shape=(nant,beam_coeffs.shape[1]), dtype=real_dtype)
+    beam_gpu.set(beam_coeffs)
+    fscale_gpu = gpuarray.empty(shape=(nant,), dtype=real_dtype)
     crd_eq_gpu = gpuarray.empty(shape=(3,npixc), dtype=real_dtype)
     eq2top_gpu = gpuarray.empty(shape=(3,3), dtype=real_dtype) # sent from CPU each time
     crdtop_gpu = gpuarray.empty(shape=(3,npixc), dtype=real_dtype) # will be set on GPU
@@ -211,18 +176,21 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
     event_order = ('start','upload','eq2top','tau','interpolate','meas_eq','vis','end')
     vis = np.empty((ntimes,nant,nant), dtype=complex_dtype)
     visfull = np.zeros(vis_spec[0], dtype=vis_spec[1])
-  
-    for index in range(len(frequencies)):      # Attempting to go beyond will trigger an exception
+      
+ 
+    for index in range(len(frequencies)): 
         freq = frequencies[index]
         I_sky = I_skies[index]
-        bm_cube = beam_lm[:, index]
         
         # apply scalars so 1j*tau*freq is the correct exponent
         freq = 2 * freq * np.pi
         Isqrt = np.sqrt(I_sky).astype(real_dtype)
-        bm_cube = bm_cube.astype(real_dtype) # XXX complex?
-        bm_texref.set_array(numpy3d_to_array(bm_cube)) # never changes, transpose happens in copy so cuda bm_tex is (BEAM_PX,BEAM_PX,NAN
-
+ 
+        fscale = np.empty(len(beam_list))	# Needed to modify za
+        for i in range(len(beam_list)):
+            fscale[i] = ( frequencies[index] / beam_list[i].ref_freq)**beam_list[i].spectral_index
+        fscale_gpu.set(fscale)
+        
         for t in range(ntimes):
             eq2top_gpu.set(eq2tops[t]) # defines sky orientation for this time step
             events = [{e:driver.Event() for e in event_order} for i in range(chunk)]
@@ -248,9 +216,8 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
                     events[cc]['tau'].record(stream)
                     ## interpolate bm_tex at specified topocentric coords, store interpolation in A
                     ## threads are parallelized across pixel axis
-                    bm_interp(crdtop_gpu, A_gpu, grid=grid, block=block, stream=stream)
+                    bm_interp(crdtop_gpu, beam_gpu, fscale_gpu, A_gpu, grid=grid, block=block, stream=stream)
                     events[cc]['interpolate'].record(stream)
-
                     # compute v = A * I * exp(1j*tau*freq)
                     meas_eq(A_gpu, Isqrt_gpu, tau_gpu, real_dtype(freq), v_gpu, 
                     grid=grid, block=block, stream=stream)
