@@ -269,9 +269,9 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
             events[chunk-1]['end'].synchronize()
             vis[t] = np.conj(sum(vis_cpus))
 
-            indices = np.triu_indices(vis.shape[1])
-            vis_upper_tri = vis[:, indices[0], indices[1]]
-            visfull[:, 0, index, 0] = vis_upper_tri.flatten()
+        indices = np.triu_indices(vis.shape[1])
+        vis_upper_tri = vis[:, indices[0], indices[1]]
+        visfull[:, 0, index, 0] = vis_upper_tri.flatten()
 
     cublasDestroy(h)
 
