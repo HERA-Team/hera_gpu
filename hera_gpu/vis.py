@@ -196,7 +196,7 @@ def vis_gpu(antpos, frequencies, eq2tops, crd_eq, I_skies, beam_lm, vis_spec,
     bm_texref = gpu_module.get_texref("bm_tex")
     h = cublasCreate() # handle for managing cublas
     # define GPU buffers and transfer initial values
-    antpos_gpu = gpuarray.to_gpu(antpos) # never changes, set to -2*pi*antpos/c
+    antpos_gpu = gpuarray.to_gpu(np.ascontiguousarray(antpos)) # never changes, set to -2*pi*antpos/c
     Isqrt_gpu = gpuarray.empty(shape=(npixc,), dtype=real_dtype)
     A_gpu = gpuarray.empty(shape=(nant,npixc), dtype=real_dtype) # will be set on GPU by bm_interp
     crd_eq_gpu = gpuarray.empty(shape=(3,npixc), dtype=real_dtype)
