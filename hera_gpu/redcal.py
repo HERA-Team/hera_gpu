@@ -6,7 +6,7 @@ from skcuda.cublas import cublasCreate, cublasDestroy
 from skcuda.cublas import cublasCcopy, cublasZcopy
 import numpy as np
 import time
-from hera_cal.redcal import OmnicalSolver, RedundantCalibrator
+from hera_cal.redcal import OmnicalSolver, RedundantCalibrator, RedSol
 from linsolve import get_name
 
 # GPU parameters
@@ -837,7 +837,7 @@ class OmnicalSolverGPU(OmnicalSolver):
         return meta, sol
 
 class RedundantCalibratorGPU(RedundantCalibrator):
-    def omnical_gpu(self, data, sol0, wgts={}, gain=.3, conv_crit=1e-10, maxiter=50, check_every=4, check_after=1, precision=None):
+    def omnical(self, data, sol0, wgts={}, gain=.3, conv_crit=1e-10, maxiter=50, check_every=4, check_after=1, precision=None):
         """Use the Liu et al 2010 Omnical algorithm to linearize 
         equations and iteratively minimize chi^2. THIS IS A DROP-IN
         REPLACEMENT FOR hera_cal.redcal.RedundantCalibrator.omnical
@@ -872,12 +872,11 @@ class RedundantCalibratorGPU(RedundantCalibrator):
                 {(index, antpol): np.array} and 
                 {(ind1,ind2,pol): np.array} formats respectively
         """
- 
         sol0 = {self.pack_sol_key(k): sol0[k] for k in sol0.keys()}
         ls = self._solver(OmnicalSolverGPU, data, sol0=sol0, wgts=wgts,
                           gain=gain)
         meta, sol = ls.solve_iteratively(conv_crit=conv_crit, 
                             maxiter=maxiter, check_every=check_every,
                             check_after=check_after, precision=precision)
-        sol = {self.unpack_sol_key(k): sol[k] for k in sol.keys()}
+        sol = RedSol(self.reds, sol_dict={self.unpack_sol_key(k): sol[k] for k in sol.keys()})
         return meta, sol
